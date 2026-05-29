@@ -1,323 +1,291 @@
 """
 LEAF Credit Agent — Streamlit Explainability Dashboard
-Sprint 1: L0 through L3
+Sprint 2: L0 through L5 with LLM Agent Orchestration
 
 Run with: streamlit run streamlit_app/app.py
+Set OPENAI_API_KEY environment variable before running.
 """
 
-import sys
-import os
+import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import streamlit as st
 import plotly.graph_objects as go
-import plotly.express as px
 import pandas as pd
 from datetime import datetime
 
 from models.schemas import LoanApplication, JurisdictionCode
-from pipeline import run_sprint1_pipeline
+from models.llm_provider import LLMProvider
+from agent import LEAFCreditAgent
 from storage.ledger import retrieve_application_ledger
 
-# ─────────────────────────────────────────────
-# Page config
-# ─────────────────────────────────────────────
-st.set_page_config(
-    page_title="LEAF Credit Agent",
-    page_icon="🌿",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
+st.set_page_config(page_title="LEAF Credit Agent", page_icon="🌿",
+                   layout="wide", initial_sidebar_state="expanded")
 
 st.markdown("""
 <style>
-    .leaf-header { font-size: 13px; font-weight: 600; color: #0F6E56; text-transform: uppercase;
-                   letter-spacing: 0.05em; margin-bottom: 4px; }
-    .xai-note { background: #F0FAF5; border-left: 3px solid #0F6E56; padding: 10px 14px;
-                border-radius: 4px; font-size: 13px; color: #444; margin: 8px 0; }
-    .layer-badge { display: inline-block; background: #E1F5EE; color: #0F6E56;
-                   padding: 3px 10px; border-radius: 20px; font-size: 12px; font-weight: 600; }
-    .metric-positive { color: #0F6E56; font-weight: 600; }
-    .metric-negative { color: #E24B4A; font-weight: 600; }
-    .metric-neutral { color: #854F0B; font-weight: 600; }
+  .leaf-badge { display:inline-block; background:#E1F5EE; color:#0F6E56;
+                padding:3px 10px; border-radius:20px; font-size:12px; font-weight:600; }
+  .xai-note { background:#F0FAF5; border-left:3px solid #0F6E56; padding:10px 14px;
+               border-radius:4px; font-size:13px; color:#444; margin:8px 0; }
+  .agent-thought { background:#F5F0FF; border-left:3px solid #534AB7; padding:8px 12px;
+                   border-radius:4px; font-size:12px; color:#26215C; margin:4px 0; }
+  .decision-approved { background:#E1F5EE; border:1px solid #0F6E56; border-radius:8px;
+                       padding:16px; text-align:center; }
+  .decision-rejected { background:#FCEBEB; border:1px solid #A32D2D; border-radius:8px;
+                       padding:16px; text-align:center; }
+  .decision-referred { background:#FAEEDA; border:1px solid #854F0B; border-radius:8px;
+                       padding:16px; text-align:center; }
 </style>
 """, unsafe_allow_html=True)
 
-
-# ─────────────────────────────────────────────
-# Sidebar — Application input form
-# ─────────────────────────────────────────────
+# ── Sidebar ──────────────────────────────────────────────────────
 with st.sidebar:
     st.markdown("## 🌿 LEAF Credit Agent")
-    st.markdown("*Layered Explainability for AI Finance*")
+    st.markdown("*Layered Explainability AI Framework*")
+    st.divider()
+
+    st.markdown("### API Configuration")
+    api_key = st.text_input("OpenAI API Key", type="password",
+                             value=os.getenv("OPENAI_API_KEY", ""),
+                             help="Your OpenAI API key")
     st.divider()
 
     st.markdown("### Loan Application")
-
     applicant_name = st.text_input("Applicant Name", value="Suresh Kumar")
-    amount = st.number_input("Loan Amount (₹)", min_value=50000, max_value=5000000,
-                              value=450000, step=10000)
-    purpose = st.selectbox("Purpose", ["Home renovation", "Education",
-                                        "Business expansion", "Medical emergency",
-                                        "Vehicle purchase", "Personal"])
-    tenure = st.slider("Tenure (months)", 12, 84, 48, step=12)
-    income = st.number_input("Monthly Income (₹)", min_value=15000, max_value=500000,
-                              value=72400, step=1000)
-    employment = st.selectbox("Employment Type", ["salaried", "self_employed", "business"])
+    amount = st.number_input("Loan Amount (₹)", 50000, 5000000, 450000, 10000)
+    purpose = st.selectbox("Purpose", ["Home renovation","Education",
+                                        "Business expansion","Medical emergency",
+                                        "Vehicle purchase","Personal"])
+    tenure = st.slider("Tenure (months)", 12, 84, 48, 12)
+    income = st.number_input("Monthly Income (₹)", 15000, 500000, 72400, 1000)
+    employment = st.selectbox("Employment Type", ["salaried","self_employed","business"])
     existing_loans = st.slider("Existing Active Loans", 0, 5, 2)
     age = st.slider("Applicant Age", 21, 65, 34)
-
     st.divider()
-    st.markdown("### LEAF Settings")
-    jurisdiction = st.selectbox("Jurisdiction", ["India", "USA", "EU"])
-    jurisdiction_map = {"India": JurisdictionCode.INDIA,
-                        "USA": JurisdictionCode.USA,
-                        "EU": JurisdictionCode.EU}
 
-    run_button = st.button("▶ Run LEAF Pipeline", type="primary", use_container_width=True)
+    run_button = st.button("▶ Run LEAF Agent", type="primary", use_container_width=True)
+    st.caption("This runs all 5 layers including LLM reasoning")
 
-
-# ─────────────────────────────────────────────
-# Main — run pipeline on button click
-# ─────────────────────────────────────────────
+# ── Run agent ────────────────────────────────────────────────────
 if run_button:
+    if not api_key:
+        st.error("Please enter your OpenAI API key in the sidebar.")
+        st.stop()
+
     application = LoanApplication(
         applicant_id=f"CUST-{datetime.now().strftime('%Y%m%d%H%M%S')}",
-        amount_requested=float(amount),
-        purpose=purpose,
-        tenure_months=tenure,
-        applicant_name=applicant_name,
-        applicant_age=age,
-        employment_type=employment,
-        monthly_income_declared=float(income),
-        existing_loans=existing_loans,
+        amount_requested=float(amount), purpose=purpose,
+        tenure_months=tenure, applicant_name=applicant_name,
+        applicant_age=age, employment_type=employment,
+        monthly_income_declared=float(income), existing_loans=existing_loans,
     )
 
-    with st.spinner("Running LEAF pipeline..."):
-        results = run_sprint1_pipeline(
-            application,
-            jurisdiction=jurisdiction_map[jurisdiction],
-            verbose=False
-        )
-    st.session_state["results"] = results
-    st.session_state["application"] = application
+    with st.spinner("🌿 LEAF Agent is reasoning through your application..."):
+        try:
+            llm = LLMProvider(api_key=api_key, provider="openai")
+            agent = LEAFCreditAgent(llm_provider=llm, verbose=False)
+            output = agent.run(application)
+            st.session_state["output"] = output
+            st.session_state["application"] = application
+        except Exception as e:
+            st.error(f"Agent error: {e}")
+            st.stop()
 
-
-# ─────────────────────────────────────────────
-# Display results
-# ─────────────────────────────────────────────
-if "results" not in st.session_state:
-    st.markdown("## Welcome to the LEAF Credit Agent")
-    st.markdown("""
-    This application demonstrates **Layered Explainability in AI Finance (LEAF)** —
-    a framework that makes every step of a credit decision visible, traceable, and auditable.
-
-    **Sprint 1 covers Layers L0 through L3:**
-    - **L0** — Request & Context: locks the regulatory envelope
-    - **L1** — Data Provenance: tracks every data source with integrity hashes
-    - **L2** — Grounding Check: scores how trustworthy each source is
-    - **L3** — Signal Extraction: computes model features with full source traceability
-
-    👈 Fill in the loan application on the left and click **Run LEAF Pipeline** to see
-    explainability at every layer.
-    """)
+if "output" not in st.session_state:
+    st.markdown("## 🌿 LEAF Credit Agent — Sprint 2")
+    st.info("Enter loan details in the sidebar and click **Run LEAF Agent** to see all 5 layers with LLM reasoning.")
     st.stop()
 
-
-results = st.session_state["results"]
+output = st.session_state["output"]
 application = st.session_state["application"]
-l0 = results["L0"]
-l1 = results["L1"]
-l2 = results["L2"]
-l3 = results["L3"]
+results = output["results"]
+l0 = results["L0"]; l1 = results["L1"]; l2 = results["L2"]
+l3 = results["L3"]; l4 = results["L4"]; l5 = results["L5"]
 
-st.markdown(f"## 🌿 LEAF Explainability Dashboard")
-st.markdown(f"Application `{l0.application_id}` · {l0.timestamp.strftime('%d %b %Y, %H:%M')}")
-st.divider()
+# ── Header ───────────────────────────────────────────────────────
+st.markdown(f"## 🌿 LEAF Agent — {l0.application_id}")
 
-# ─── Layer tabs ──────────────────────────────
-tab0, tab1, tab2, tab3, tab4 = st.tabs([
-    "L0 — Context", "L1 — Provenance", "L2 — Grounding",
-    "L3 — Signals", "📋 Evidence Ledger"
+# Decision banner
+dec = l4.decision
+if "Approved" in dec:
+    st.markdown(f'<div class="decision-approved"><h2 style="color:#0F6E56">✓ {dec}</h2>'
+                f'<p style="color:#0F6E56">Approval probability: {l4.approval_probability:.1%} · '
+                f'Confidence: {l4.decision_confidence}</p></div>', unsafe_allow_html=True)
+elif "Rejected" in dec:
+    st.markdown(f'<div class="decision-rejected"><h2 style="color:#A32D2D">✗ {dec}</h2>'
+                f'<p style="color:#A32D2D">Approval probability: {l4.approval_probability:.1%}</p></div>',
+                unsafe_allow_html=True)
+else:
+    st.markdown(f'<div class="decision-referred"><h2 style="color:#854F0B">⚠ {dec}</h2>'
+                f'<p style="color:#854F0B">Approval probability: {l4.approval_probability:.1%}</p></div>',
+                unsafe_allow_html=True)
+
+st.markdown("---")
+
+# ── Tabs ─────────────────────────────────────────────────────────
+tab0,tab1,tab2,tab3,tab4,tab5,tab6,tab7 = st.tabs([
+    "L0 Context","L1 Provenance","L2 Grounding",
+    "L3 Signals","L4 SHAP","L5 Explanation",
+    "🤖 Agent Trace","📋 Ledger"
 ])
 
-
-# ══════════════════════════════════════════════
-# L0 Tab
-# ══════════════════════════════════════════════
+# L0
 with tab0:
-    st.markdown('<div class="layer-badge">L0 — Request & Context</div>', unsafe_allow_html=True)
-    st.markdown("### What was requested, by whom, under which rules?")
-
-    col1, col2, col3 = st.columns(3)
-    col1.metric("Application ID", l0.application_id[-8:])
-    col2.metric("Jurisdiction", l0.jurisdiction.value)
-    col3.metric("Adverse Notice Required", "Yes ✓" if l0.adverse_action_notice_required else "No")
-
-    st.markdown("#### Regulatory Frameworks Applied")
+    st.markdown('<div class="leaf-badge">L0 — Request & Context</div>', unsafe_allow_html=True)
+    c1,c2,c3 = st.columns(3)
+    c1.metric("Jurisdiction", l0.jurisdiction.value)
+    c2.metric("Adverse Notice", "Required ✓" if l0.adverse_action_notice_required else "Not required")
+    c3.metric("Frameworks", len(l0.regulatory_frameworks))
     for fw in l0.regulatory_frameworks:
         st.success(f"✓ {fw.value}")
+    st.markdown('<div class="xai-note">🔍 L0 locks the regulatory envelope before any data is processed. '
+                'All downstream explanations are generated within these constraints.</div>',
+                unsafe_allow_html=True)
 
-    st.markdown("#### Application Details")
-    df = pd.DataFrame([
-        ("Applicant ID", application.applicant_id),
-        ("Loan Amount", f"₹{application.amount_requested:,.0f}"),
-        ("Purpose", application.purpose),
-        ("Tenure", f"{application.tenure_months} months"),
-        ("Employment", application.employment_type.title()),
-        ("Declared Income", f"₹{application.monthly_income_declared:,.0f}/month"),
-        ("Existing Loans", str(application.existing_loans)),
-    ], columns=["Field", "Value"])
-    st.dataframe(df, hide_index=True, use_container_width=True)
-
-    st.markdown(
-        f'<div class="xai-note">🔍 <b>Explainability note:</b> {l0.xai_note}</div>',
-        unsafe_allow_html=True
-    )
-
-
-# ══════════════════════════════════════════════
-# L1 Tab
-# ══════════════════════════════════════════════
+# L1
 with tab1:
-    st.markdown('<div class="layer-badge">L1 — Data Provenance</div>', unsafe_allow_html=True)
-    st.markdown("### Every data source — logged, hashed, timestamped")
-
-    col1, col2, col3 = st.columns(3)
-    col1.metric("Total Sources", l1.total_sources)
-    col2.metric("Verified", l1.verified_sources)
-    col3.metric("With Warnings", l1.sources_with_warnings,
-                delta="⚠ Review needed" if l1.sources_with_warnings > 0 else None,
-                delta_color="inverse")
-
-    st.markdown("#### Provenance Certificate")
+    st.markdown('<div class="leaf-badge">L1 — Data Provenance</div>', unsafe_allow_html=True)
+    c1,c2,c3 = st.columns(3)
+    c1.metric("Sources", l1.total_sources)
+    c2.metric("Verified", l1.verified_sources)
+    c3.metric("Warnings", l1.sources_with_warnings)
     for src in l1.sources:
-        with st.expander(
-            f"{'⚠ ' if src.freshness_warning else '✓ '}{src.source_name}  —  hash: `{src.integrity_hash}`",
-            expanded=not src.freshness_warning
-        ):
-            c1, c2, c3, c4 = st.columns(4)
-            c1.metric("Source Type", src.source_type.value.replace("_", " ").title())
-            c2.metric("Age", f"{src.age_hours:.0f} hours")
+        icon = "⚠" if src.freshness_warning else "✓"
+        with st.expander(f"{icon} {src.source_name} — hash: `{src.integrity_hash}`"):
+            c1,c2,c3,c4 = st.columns(4)
+            c1.metric("Type", src.source_type.value.replace("_"," ").title())
+            c2.metric("Age", f"{src.age_hours:.0f}h")
             c3.metric("Records", src.record_count)
-            c4.metric("Verified", "✓ Yes" if src.is_verified else "✗ No")
+            c4.metric("Verified", "Yes ✓" if src.is_verified else "No")
             if src.freshness_warning:
-                st.warning(f"⚠ {src.freshness_warning}")
+                st.warning(src.freshness_warning)
 
-    st.markdown(
-        f'<div class="xai-note">🔍 <b>Explainability note:</b> {l1.xai_note}</div>',
-        unsafe_allow_html=True
-    )
-
-
-# ══════════════════════════════════════════════
-# L2 Tab
-# ══════════════════════════════════════════════
+# L2
 with tab2:
-    st.markdown('<div class="layer-badge">L2 — Grounding Check</div>', unsafe_allow_html=True)
-    st.markdown("### How trustworthy is the data this decision is based on?")
-
+    st.markdown('<div class="leaf-badge">L2 — Grounding Check</div>', unsafe_allow_html=True)
+    c1,c2,c3 = st.columns(3)
     score = l2.composite_grounding_score
-    col1, col2, col3 = st.columns(3)
-    col1.metric("Composite Score", f"{score:.2f}",
-                delta="High confidence" if score >= 0.85 else "Moderate confidence")
-    col2.metric("Proceed to Model", "✓ Yes" if l2.proceed_to_model else "✗ Hold for review")
-    col3.metric("Weakest Source", l2.weakest_source.split("(")[0].strip())
-
-    st.markdown("#### Grounding Scores — per source")
+    c1.metric("Composite Score", f"{score:.2f}")
+    c2.metric("Proceed", "✓ Yes" if l2.proceed_to_model else "✗ Hold")
+    c3.metric("Weakest Source", l2.weakest_source.split("(")[0].strip()[:20])
+    names = [s.source_name.split("(")[0].strip() for s in l2.source_scores]
     fig = go.Figure()
-    source_names = [s.source_name.split("(")[0].strip() for s in l2.source_scores]
-    composites = [s.composite_score for s in l2.source_scores]
-    freshness = [s.freshness_score for s in l2.source_scores]
-    completeness = [s.completeness_score for s in l2.source_scores]
-    consistency = [s.consistency_score for s in l2.source_scores]
-
-    fig.add_trace(go.Bar(name="Freshness (40%)", x=source_names,
-                          y=[f * 0.40 for f in freshness], marker_color="#0F6E56"))
-    fig.add_trace(go.Bar(name="Completeness (35%)", x=source_names,
-                          y=[c * 0.35 for c in completeness], marker_color="#5DCAA5"))
-    fig.add_trace(go.Bar(name="Consistency (25%)", x=source_names,
-                          y=[c * 0.25 for c in consistency], marker_color="#9FE1CB"))
-    fig.update_layout(
-        barmode="stack", height=320,
-        yaxis_title="Weighted Score",
-        legend=dict(orientation="h", yanchor="bottom", y=1.02),
-        margin=dict(l=0, r=0, t=30, b=0),
-        paper_bgcolor="rgba(0,0,0,0)",
-        plot_bgcolor="rgba(0,0,0,0)",
-    )
+    fig.add_trace(go.Bar(name="Freshness (40%)", x=names,
+                          y=[s.freshness_score*0.40 for s in l2.source_scores],
+                          marker_color="#0F6E56"))
+    fig.add_trace(go.Bar(name="Completeness (35%)", x=names,
+                          y=[s.completeness_score*0.35 for s in l2.source_scores],
+                          marker_color="#5DCAA5"))
+    fig.add_trace(go.Bar(name="Consistency (25%)", x=names,
+                          y=[s.consistency_score*0.25 for s in l2.source_scores],
+                          marker_color="#9FE1CB"))
+    fig.update_layout(barmode="stack", height=300, margin=dict(l=0,r=0,t=20,b=0),
+                      paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
     fig.add_hline(y=l2.proceed_threshold, line_dash="dash",
-                   line_color="#E24B4A", annotation_text="Proceed threshold")
+                   line_color="#E24B4A", annotation_text="Threshold")
     st.plotly_chart(fig, use_container_width=True)
 
-    st.markdown(
-        f'<div class="xai-note">🔍 <b>Explainability note:</b> {l2.xai_note}</div>',
-        unsafe_allow_html=True
-    )
-
-
-# ══════════════════════════════════════════════
-# L3 Tab
-# ══════════════════════════════════════════════
+# L3
 with tab3:
-    st.markdown('<div class="layer-badge">L3 — Signal Extraction</div>', unsafe_allow_html=True)
-    st.markdown("### Every model feature — visible, traceable, interpretable")
-
-    col1, col2, col3 = st.columns(3)
-    col1.metric("Total Signals", l3.total_signals)
-    col2.metric("Positive ▲", l3.positive_signals)
-    col3.metric("Negative ▼", l3.negative_signals)
-
-    st.markdown("#### Signal Log — with source traceability")
+    st.markdown('<div class="leaf-badge">L3 — Signal Extraction</div>', unsafe_allow_html=True)
+    c1,c2,c3 = st.columns(3)
+    c1.metric("Total Signals", l3.total_signals)
+    c2.metric("Positive ▲", l3.positive_signals)
+    c3.metric("Negative ▼", l3.negative_signals)
     for sig in l3.signals:
-        icon = "▲" if sig.risk_direction == "positive" else ("▼" if sig.risk_direction == "negative" else "─")
-        color = "normal" if sig.risk_direction == "positive" else ("off" if sig.risk_direction == "negative" else "normal")
-        with st.expander(f"{icon} {sig.signal_name}  —  {sig.display_value}"):
-            c1, c2 = st.columns([1, 2])
-            with c1:
-                st.markdown("**Sources used**")
-                for src_id in sig.source_ids:
-                    src_match = next((s for s in l1.sources if s.source_id == src_id), None)
-                    if src_match:
-                        st.caption(f"• {src_match.source_name}")
-                st.markdown("**Risk direction**")
-                if sig.risk_direction == "positive":
-                    st.success("▲ Positive")
-                elif sig.risk_direction == "negative":
-                    st.error("▼ Negative")
-                else:
-                    st.warning("─ Neutral")
-            with c2:
-                st.markdown("**How it was computed**")
-                st.code(sig.computation_formula, language=None)
-                st.markdown("**What it means**")
-                st.info(sig.interpretation)
+        arrow = "▲" if sig.risk_direction=="positive" else ("▼" if sig.risk_direction=="negative" else "─")
+        with st.expander(f"{arrow} {sig.signal_name} — {sig.display_value}"):
+            st.code(sig.computation_formula)
+            st.info(sig.interpretation)
+            st.caption(f"Sources: {', '.join(sig.source_ids)}")
 
-    st.markdown("#### Model-Ready Feature Vector")
-    feat_df = pd.DataFrame([
-        {"Feature": k, "Value": round(v, 4)}
-        for k, v in l3.model_ready_features.items()
-    ])
-    st.dataframe(feat_df, hide_index=True, use_container_width=True)
-
-    st.markdown(
-        f'<div class="xai-note">🔍 <b>Explainability note:</b> {l3.xai_note}</div>',
-        unsafe_allow_html=True
-    )
-
-
-# ══════════════════════════════════════════════
-# Evidence Ledger Tab
-# ══════════════════════════════════════════════
+# L4
 with tab4:
-    st.markdown("### 📋 Evidence Ledger — sealed artifacts")
-    st.markdown("Every layer output is hashed and stored. Nothing can be modified after sealing.")
+    st.markdown('<div class="leaf-badge">L4 — Model Reasoning (SHAP)</div>', unsafe_allow_html=True)
+    c1,c2,c3 = st.columns(3)
+    c1.metric("Approval Probability", f"{l4.approval_probability:.1%}")
+    c2.metric("Decision", l4.decision)
+    c3.metric("Model Confidence", l4.decision_confidence)
 
+    st.markdown("#### SHAP Waterfall — this applicant")
+    contribs = l4.shap_contributions
+    labels = [c.plain_label for c in contribs[:8]]
+    values = [c.shap_value for c in contribs[:8]]
+    colors = ["#0F6E56" if v > 0 else "#E24B4A" for v in values]
+    fig2 = go.Figure(go.Bar(
+        x=values, y=labels, orientation="h",
+        marker_color=colors,
+        text=[f"{v:+.3f}" for v in values],
+        textposition="outside",
+    ))
+    fig2.update_layout(height=350, margin=dict(l=0,r=60,t=20,b=0),
+                       xaxis_title="SHAP contribution to approval",
+                       paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
+    fig2.add_vline(x=0, line_color="gray", line_width=1)
+    st.plotly_chart(fig2, use_container_width=True)
+
+    st.markdown("#### Counterfactual")
+    st.info(f"💡 {l4.counterfactual_hint}")
+    st.markdown('<div class="xai-note">🔍 Negative SHAP values (red) increase default risk. '
+                'Positive values (green) reduce default risk and support approval.</div>',
+                unsafe_allow_html=True)
+
+# L5
+with tab5:
+    st.markdown('<div class="leaf-badge">L5 — Explanation Card (LLM Generated)</div>',
+                unsafe_allow_html=True)
+    card = l5.explanation_card
+    st.markdown(f"### {card.decision_summary}")
+    c1,c2 = st.columns(2)
+    with c1:
+        st.markdown("**Why approved / factors in your favour:**")
+        for f in card.top_positive_factors:
+            st.success(f"▲ {f}")
+    with c2:
+        st.markdown("**Risk factors considered:**")
+        for f in card.top_negative_factors:
+            st.warning(f"▼ {f}")
+    st.markdown("#### Plain language rationale")
+    st.write(l5.plain_language_rationale)
+    st.markdown("#### What would improve your position")
+    st.info(f"💡 {card.counterfactual}")
+    st.markdown("#### Interest Rate Band")
+    st.metric("Rate", l5.interest_rate_band)
+    st.caption(card.confidence_note)
+    st.caption(f"📋 {card.applicant_rights}")
+
+# Agent Trace
+with tab6:
+    st.markdown("### 🤖 Agent Reasoning Trace")
+    st.markdown("*This is what makes LEAF agentic — the LLM's reasoning at every layer*")
+    trace = output.get("reasoning_trace", {})
+    observations = trace.get("agent_observations", {})
+    decisions = trace.get("layer_decisions", {})
+    for layer in ["L0","L1","L2","L3","L4"]:
+        obs = observations.get(layer,"")
+        dec = decisions.get(layer,"")
+        if obs:
+            col1,col2 = st.columns([4,1])
+            with col1:
+                st.markdown(f'<div class="agent-thought">💭 <b>{layer}:</b> {obs}</div>',
+                            unsafe_allow_html=True)
+            with col2:
+                if dec == "PROCEED":
+                    st.success(dec)
+                elif dec == "ESCALATE":
+                    st.warning(dec)
+                else:
+                    st.error(dec)
+    st.markdown("#### L5 — Explanation Card generation trace")
+    st.code(l5.agent_reasoning_trace, language=None)
+
+# Ledger
+with tab7:
+    st.markdown("### 📋 Evidence Ledger — sealed artifacts")
     entries = retrieve_application_ledger(l0.application_id)
     for entry in entries:
-        st.markdown(f"**{entry.layer}** — sealed `{entry.artifact_hash}` at {entry.sealed_at.strftime('%H:%M:%S')}")
-
-    st.divider()
-    st.markdown(f"**Total sealed artifacts:** {len(entries)}")
-    st.markdown(f"**Application ID:** `{l0.application_id}`")
-    st.caption("Artifacts are stored in SQLite and retrievable for audit at any time.")
+        st.markdown(f"**{entry.layer}** — `{entry.artifact_hash}` — "
+                    f"sealed at {entry.sealed_at.strftime('%H:%M:%S')}")
+    st.metric("Total artifacts sealed", len(entries))
+    st.caption(f"Application: `{l0.application_id}` · Immutable · Auditable")
