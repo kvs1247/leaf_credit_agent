@@ -15,6 +15,7 @@ from layers.l3_signals import L3SignalExtraction
 from layers.l4_model import L4ModelReasoning_Layer
 from layers.l6_confidence import L6ConfidenceGrade_Layer
 from layers.l7_compliance import L7Compliance_Layer
+from layers.l8_fairness import L8FairnessDiagnostics_Layer
 from storage.ledger import init_ledger, seal_artifact
 from typing import Optional
 
@@ -162,6 +163,22 @@ def run_pipeline(
                 print(f"       ✗ Blocking: {v}")
         if l7.override_reason:
             print(f"       ⚠ Override: {l7.override_reason}")
+
+    # ── L8 ───────────────────────────────────────────────────────
+    if verbose:
+        print("\n[LEAF] ▶ L8 — Bias & Fairness Diagnostics")
+    l8 = L8FairnessDiagnostics_Layer().process(
+        l0, l3, l4, l6, l7, application_id=l0.application_id
+    )
+    seal_artifact(l0.application_id, "L8", l8.model_dump())
+    results["L8"] = l8
+    if verbose:
+        print(f"       Verdict            : {l8.verdict}")
+        print(f"       Overall Bias Score : {l8.obs:.3f}")
+        print(f"       Investigation      : {l8.investigation_required}")
+        print(f"       Flags detected     : {l8.total_flags}")
+        for flag in l8.bias_flags:
+            print(f"       ⚠ [{flag.severity}] {flag.bias_type}")
 
     # ── L5 (optional — needs LLM) ─────────────────────────────────
     if llm_provider:

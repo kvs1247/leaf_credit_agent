@@ -29,6 +29,7 @@ from layers.l4_model import L4ModelReasoning_Layer
 from layers.l5_recommendation import L5Recommendation_Layer
 from layers.l6_confidence import L6ConfidenceGrade_Layer
 from layers.l7_compliance import L7Compliance_Layer
+from layers.l8_fairness import L8FairnessDiagnostics_Layer
 from storage.ledger import init_ledger, seal_artifact, write_summary
 
 
@@ -348,6 +349,32 @@ class LEAFCreditAgent:
                 "note": "Pipeline continues — all layers run independently"
             })
 
+        # ── L8 ──────────────────────────────────────────────────────
+        self._log("\n[Agent] ▶ Calling L8 — Bias & Fairness Diagnostics")
+        l8_layer = L8FairnessDiagnostics_Layer()
+        l8 = l8_layer.process(
+            l0, l3, l4, l6, l7, application_id=l0.application_id
+        )
+        seal_artifact(l0.application_id, "L8", l8.model_dump())
+        results["L8"] = l8
+        self._log(f"[Agent]   Verdict          : {l8.verdict}")
+        self._log(f"[Agent]   Bias Score (OBS) : {l8.obs:.3f}")
+        self._log(f"[Agent]   Flags detected   : {l8.total_flags}")
+        for flag in l8.bias_flags:
+            self._log(f"[Agent]   ⚠ [{flag.severity}] {flag.bias_type}")
+
+        l8_reasoning = self._agent_reason("L8", {
+            "verdict": l8.verdict,
+            "obs": l8.obs,
+            "investigation_required": l8.investigation_required,
+            "total_flags": l8.total_flags,
+            "flags": [f.bias_type for f in l8.bias_flags],
+            "proxy_bias": l8.evidence_source.proxy_bias_detected,
+            "fairness_summary": l8.fairness_summary,
+        })
+        self._log(f"[Agent] 💭 {l8_reasoning.get('observation', '')}")
+        self._log(f"[Agent] → Decision: {l8_reasoning['decision']}")
+
         # ── L5 ──────────────────────────────────────────────────────
         self._log("\n[Agent] ▶ Calling L5 — Generating Explanation Card")
         l5_layer = L5Recommendation_Layer(llm_provider=self.llm)
@@ -390,6 +417,7 @@ class LEAFCreditAgent:
                 "L4": l4_reasoning.get("decision"),
                 "L6": l6_reasoning.get("decision"),
                 "L7": l7_reasoning.get("decision"),
+                "L8": l8_reasoning.get("decision"),
             },
             "agent_observations": {
                 "L0": l0_reasoning.get("observation", ""),
@@ -399,6 +427,7 @@ class LEAFCreditAgent:
                 "L4": l4_reasoning.get("observation", ""),
                 "L6": l6_reasoning.get("observation", ""),
                 "L7": l7_reasoning.get("observation", ""),
+                "L8": l8_reasoning.get("observation", ""),
             },
             "final_decision": l4.decision,
             "completed_at": datetime.now().isoformat(),

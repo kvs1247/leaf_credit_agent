@@ -16,6 +16,7 @@ from layers.l4_model import L4ModelReasoning
 from layers.l5_recommendation import L5Recommendation
 from layers.l6_confidence import L6ConfidenceGrade
 from layers.l7_compliance import L7GovernanceVerdict
+from layers.l8_fairness import L8FairnessDiagnostics
 
 
 def load_application_results(application_id: str) -> Optional[dict]:
@@ -66,6 +67,11 @@ def load_application_results(application_id: str) -> Optional[dict]:
     l7_data = get_layer_artifact(application_id, "L7")
     if l7_data:
         results["L7"] = L7GovernanceVerdict(**l7_data)
+
+    # L8
+    l8_data = get_layer_artifact(application_id, "L8")
+    if l8_data:
+        results["L8"] = L8FairnessDiagnostics(**l8_data)
 
     # Agent trace
     trace_data = get_layer_artifact(application_id, "AGENT_TRACE")

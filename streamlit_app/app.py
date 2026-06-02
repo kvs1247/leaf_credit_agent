@@ -291,6 +291,7 @@ elif st.session_state.screen == "viewing":
     l5 = results.get("L5")
     l6 = results.get("L6")
     l7 = results.get("L7")
+    l8 = results.get("L8")
     trace = results.get("AGENT_TRACE", {})
 
     # ── Decision banner ───────────────────────────────────────────
@@ -356,10 +357,10 @@ elif st.session_state.screen == "viewing":
     st.markdown("---")
 
     # ── Tabs ──────────────────────────────────────────────────────
-    tab0,tab1,tab2,tab3,tab4,tab5,tab6,tab7,tab8,tab9 = st.tabs([
+    tab0,tab1,tab2,tab3,tab4,tab5,tab6,tab7,tab8,tab9,tab10 = st.tabs([
         "L0 Context","L1 Provenance","L2 Grounding",
         "L3 Signals","L4 SHAP","L5 Explanation","L6 Confidence",
-        "L7 Governance",
+        "L7 Governance","L8 Fairness",
         "🤖 Agent Trace","📋 Ledger"
     ])
 
@@ -864,15 +865,184 @@ elif st.session_state.screen == "viewing":
         else:
             st.info("L7 not available for this application.")
 
-    # ── Agent Trace ───────────────────────────────────────────────
+    # ── L8 ────────────────────────────────────────────────────────
     with tab8:
+        st.markdown('<div class="leaf-badge">L8 — Bias & Fairness Diagnostics</div>',
+                    unsafe_allow_html=True)
+        st.markdown("### Is the system behaving fairly over time?")
+        st.markdown(
+            '*L7 asks: is this decision allowed? '
+            'L8 asks: **is the system fair over time?** '
+            'These are fundamentally different questions.*'
+        )
+
+        if l8:
+            # Verdict banner
+            verdict_styles = {
+                "Fair":    ("#E1F5EE", "#0F6E56", "✓"),
+                "Caution": ("#FAEEDA", "#854F0B", "⚠"),
+                "Biased":  ("#FCEBEB", "#A32D2D", "🚫"),
+            }
+            bg, fg, icon = verdict_styles.get(
+                l8.verdict, ("#F5F5F5", "#333", "?")
+            )
+            st.markdown(
+                f'<div style="background:{bg};border:1px solid {fg};'
+                f'border-radius:8px;padding:16px;text-align:center;'
+                f'margin-bottom:16px;">'
+                f'<h2 style="color:{fg};margin:0">'
+                f'{icon} Fairness Verdict: {l8.verdict}</h2>'
+                f'<p style="color:{fg};margin:4px 0">'
+                f'Overall Bias Score: {l8.obs:.3f} · '
+                f'Flags: {l8.total_flags} · '
+                f'Investigation: {"Required" if l8.investigation_required else "Not required"}'
+                f'</p></div>',
+                unsafe_allow_html=True
+            )
+
+            # Key metrics row
+            c1,c2,c3,c4,c5 = st.columns(5)
+            c1.metric("EII", f"{l8.eii:.3f}",
+                      help="Exposure Imbalance Index")
+            c2.metric("ARP", f"{l8.arp:.3f}",
+                      help="Approval Rate Parity gap")
+            c3.metric("SCI", f"{l8.sci:.3f}",
+                      help="Source Concentration Index")
+            c4.metric("TDS", f"{l8.tds:.3f}",
+                      help="Temporal Drift Score")
+            c5.metric("ICS", f"{l8.ics:.3f}",
+                      help="Individual Consistency Score")
+
+            st.markdown(f"*Analysis based on {l8.total_applications_analysed} "
+                        f"historical applications*")
+
+            # Five diagnostic areas
+            st.markdown("#### Five Diagnostic Areas")
+            areas = [
+                ("1. Representation Fairness",
+                 l8.representation.score,
+                 l8.representation.flags,
+                 f"EII Employment: {l8.representation.eii_employment:.3f} · "
+                 f"EII Income: {l8.representation.eii_income:.3f}",
+                 l8.representation.data_basis),
+                ("2. Outcome Fairness",
+                 l8.outcome.score,
+                 l8.outcome.flags,
+                 f"ARP disparity: {l8.outcome.arp_disparity:.3f} · "
+                 f"CP disparity: {l8.outcome.cp_disparity:.3f}",
+                 l8.outcome.data_basis),
+                ("3. Evidence & Source Fairness",
+                 l8.evidence_source.score,
+                 l8.evidence_source.flags,
+                 f"SCI: {l8.evidence_source.sci:.3f} · "
+                 f"Bureau dependency: {l8.evidence_source.cibil_dependency:.0%} · "
+                 f"Alt data: {l8.evidence_source.alternative_data_utilisation:.0%}",
+                 "Individual application analysis"),
+                ("4. Temporal Fairness",
+                 l8.temporal.score,
+                 l8.temporal.flags,
+                 f"TDS: {l8.temporal.tds:.3f} · "
+                 f"Historical rate: {l8.temporal.historical_approval_rate:.0%} · "
+                 f"Recent rate: {l8.temporal.recent_approval_rate:.0%}",
+                 l8.temporal.data_basis),
+                ("5. Individual/Profile Fairness",
+                 l8.individual_profile.score,
+                 l8.individual_profile.flags,
+                 f"ICS: {l8.individual_profile.ics:.3f} · "
+                 f"Similar profiles: {l8.individual_profile.similar_profiles_found}",
+                 l8.individual_profile.data_basis),
+            ]
+
+            for area_name, score, flags, detail, basis in areas:
+                color = ("green" if score >= 0.75
+                         else "orange" if score >= 0.55
+                         else "red")
+                with st.expander(
+                    f":{color}[Score: {score:.3f}] {area_name}"
+                ):
+                    st.caption(detail)
+                    st.caption(basis)
+                    if flags:
+                        for flag in flags:
+                            st.warning(f"⚠ {flag}")
+                    else:
+                        st.success("✓ No issues detected in this area")
+
+            # Proxy bias
+            if l8.evidence_source.proxy_bias_detected:
+                st.markdown("#### 🚨 Proxy Bias Alert")
+                st.error(
+                    f"**Demographic proxy detected:** "
+                    f"{l8.evidence_source.proxy_details}"
+                )
+            if l8.individual_profile.proxy_risks:
+                st.markdown("#### Proxy Risk Indicators")
+                for risk in l8.individual_profile.proxy_risks:
+                    st.warning(f"⚠ {risk}")
+
+            # Bias flags with full detail
+            if l8.bias_flags:
+                st.markdown("#### Detected Bias Flags")
+                for flag in l8.bias_flags:
+                    sev_color = (
+                        "red" if flag.severity in ("high","critical")
+                        else "orange"
+                    )
+                    with st.expander(
+                        f":{sev_color}[{flag.severity.upper()}] "
+                        f"{flag.bias_type} — {flag.dimension}"
+                    ):
+                        st.write(flag.description)
+                        c1, c2 = st.columns(2)
+                        c1.caption(f"**Observed:** {flag.observed_value}")
+                        c2.caption(f"**Threshold:** {flag.threshold}")
+                        st.markdown("**Root cause:**")
+                        st.write(flag.root_cause_indicator)
+                        st.markdown("**Recommended action:**")
+                        st.info(flag.recommended_action)
+                        if flag.regulation_reference:
+                            st.caption(
+                                f"📋 Regulation: {flag.regulation_reference}"
+                            )
+
+            # Remediation
+            st.markdown("#### Remediation Actions")
+            for action in l8.remediation_actions:
+                st.info(f"→ {action}")
+
+            # Fairness summary
+            st.markdown("#### Fairness Summary")
+            if l8.verdict == "Fair":
+                st.success(l8.fairness_summary)
+            elif l8.verdict == "Caution":
+                st.warning(l8.fairness_summary)
+            else:
+                st.error(l8.fairness_summary)
+
+            st.markdown(
+                '<div class="xai-note">🔍 '
+                '<b>Fairness Explainability:</b> '
+                'L8 detects unjustified patterns across decisions. '
+                'Everything may be compliant and accurate — yet the system '
+                'could still drift into systematic unfairness without anyone '
+                'noticing. L8 is the continuous fairness assurance loop. '
+                'As more applications accumulate, this analysis becomes '
+                'richer and more reliable.'
+                '</div>',
+                unsafe_allow_html=True
+            )
+        else:
+            st.info("L8 not available for this application.")
+
+    # ── Agent Trace ───────────────────────────────────────────────
+    with tab9:
         st.markdown("### 🤖 Agent Reasoning Trace")
         st.markdown("*The LLM's reasoning at every layer — this is what makes LEAF agentic*")
 
         if trace:
             observations = trace.get("agent_observations", {})
             decisions_map = trace.get("layer_decisions", {})
-            for layer in ["L0","L1","L2","L3","L4","L6","L7"]:
+            for layer in ["L0","L1","L2","L3","L4","L6","L7","L8"]:
                 obs = observations.get(layer,"")
                 dec_val = decisions_map.get(layer,"")
                 if obs:
@@ -896,7 +1066,7 @@ elif st.session_state.screen == "viewing":
             st.info("No agent trace available for this application.")
 
     # ── Evidence Ledger ───────────────────────────────────────────
-    with tab9:
+    with tab10:
         st.markdown("### 📋 Evidence Ledger — sealed artifacts")
         st.markdown("Every layer output is hashed and stored immutably.")
         entries = retrieve_application_ledger(l0.application_id)
