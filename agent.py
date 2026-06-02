@@ -27,7 +27,7 @@ from layers.l2_grounding import L2GroundingCheck
 from layers.l3_signals import L3SignalExtraction
 from layers.l4_model import L4ModelReasoning_Layer
 from layers.l5_recommendation import L5Recommendation_Layer
-from storage.ledger import init_ledger, seal_artifact
+from storage.ledger import init_ledger, seal_artifact, write_summary
 
 
 # ─────────────────────────────────────────────
@@ -89,10 +89,12 @@ class LEAFCreditAgent:
         llm_provider: Optional[LLMProvider] = None,
         jurisdiction: JurisdictionCode = JurisdictionCode.INDIA,
         verbose: bool = True,
+        scenario_tag: Optional[str] = None,
     ):
         self.llm = llm_provider or get_provider_from_env()
         self.jurisdiction = jurisdiction
         self.verbose = verbose
+        self.scenario_tag = scenario_tag
         self.reasoning_log = []
 
         # Ensure model is loaded/trained
@@ -272,6 +274,18 @@ class LEAFCreditAgent:
         results["L5"] = l5
         self._log(f"[Agent]   Explanation Card generated")
         self._log(f"[Agent]   Rationale: {l5.plain_language_rationale[:100]}...")
+
+        # ── Write summary to summaries table ────────────────────
+        write_summary(
+            application_id=l0.application_id,
+            applicant_name=application.applicant_name,
+            amount_requested=application.amount_requested,
+            purpose=application.purpose,
+            decision=l4.decision,
+            approval_probability=l4.approval_probability,
+            confidence=l4.decision_confidence,
+            scenario_tag=self.scenario_tag,
+        )
 
         # ── Seal full reasoning trace ────────────────────────────
         full_trace = {
