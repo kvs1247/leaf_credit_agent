@@ -112,23 +112,31 @@ if st.session_state.screen == "home":
         if st.button("🎭 Load Demo Scenarios", use_container_width=True,
                      help="Load 4 pre-crafted scenarios covering all LEAF capabilities"):
             if not st.session_state.api_key:
-                st.error("Please enter your OpenAI API key first.")
+                st.error("Please enter your OpenAI API key in the sidebar first.")
             else:
                 from demo_scenarios import load_demo_scenarios
-                llm = LLMProvider(api_key=st.session_state.api_key, provider="openai")
-
+                llm = LLMProvider(
+                    api_key=st.session_state.api_key, provider="openai"
+                )
                 progress_bar = st.progress(0)
                 status_text = st.empty()
 
                 def on_progress(i, total, label):
-                    progress_bar.progress((i) / total)
-                    status_text.info(f"Loading scenario {i+1}/{total}: {label}...")
+                    progress_bar.progress(i / total)
+                    status_text.info(
+                        f"Loading scenario {i+1}/{total}: {label}..."
+                    )
 
-                with st.spinner("Loading demo scenarios..."):
+                with st.spinner("Loading demo scenarios — this takes 2-3 minutes..."):
                     try:
-                        load_demo_scenarios(llm, progress_callback=on_progress)
+                        load_demo_scenarios(
+                            llm_provider=llm,
+                            progress_callback=on_progress
+                        )
                         progress_bar.progress(1.0)
-                        status_text.success("✓ 4 demo scenarios loaded successfully")
+                        status_text.success(
+                            "✓ 4 demo scenarios loaded with genuine AI explanations"
+                        )
                     except Exception as e:
                         st.error(f"Error loading scenarios: {e}")
                 st.rerun()
@@ -281,6 +289,7 @@ elif st.session_state.screen == "viewing":
     l3 = results.get("L3")
     l4 = results.get("L4")
     l5 = results.get("L5")
+    l6 = results.get("L6")
     trace = results.get("AGENT_TRACE", {})
 
     # ── Decision banner ───────────────────────────────────────────
@@ -313,9 +322,9 @@ elif st.session_state.screen == "viewing":
     st.markdown("---")
 
     # ── Tabs ──────────────────────────────────────────────────────
-    tab0,tab1,tab2,tab3,tab4,tab5,tab6,tab7 = st.tabs([
+    tab0,tab1,tab2,tab3,tab4,tab5,tab6,tab7,tab8 = st.tabs([
         "L0 Context","L1 Provenance","L2 Grounding",
-        "L3 Signals","L4 SHAP","L5 Explanation",
+        "L3 Signals","L4 SHAP","L5 Explanation","L6 Confidence",
         "🤖 Agent Trace","📋 Ledger"
     ])
 
@@ -473,16 +482,206 @@ elif st.session_state.screen == "viewing":
 
             st.caption(card.confidence_note)
             st.caption(f"📋 {card.applicant_rights}")
+        else:
+            st.info("L5 not available — LLM provider not supplied for this run.")
+
+    # ── L6 ────────────────────────────────────────────────────────
+    with tab6:
+        st.markdown('<div class="leaf-badge">L6 — Confidence Grade</div>',
+                    unsafe_allow_html=True)
+        st.markdown("### How trustworthy is this recommendation?")
+
+        if l6:
+            # Grade banner
+            grade_colors = {
+                "A": ("#E1F5EE", "#0F6E56"),
+                "B": ("#EAF4FF", "#185FA5"),
+                "C": ("#FAEEDA", "#854F0B"),
+                "D": ("#FCEBEB", "#A32D2D"),
+            }
+            bg, fg = grade_colors.get(l6.grade, ("#F5F5F5", "#333"))
+            st.markdown(
+                f'<div style="background:{bg};border:1px solid {fg};'
+                f'border-radius:8px;padding:16px;text-align:center;'
+                f'margin-bottom:16px;">'
+                f'<h2 style="color:{fg};margin:0">Grade {l6.grade}</h2>'
+                f'<p style="color:{fg};margin:4px 0">'
+                f'{l6.grade_meaning}</p>'
+                f'<p style="color:{fg};font-size:13px;margin:4px 0">'
+                f'Composite Score: {l6.composite_score:.3f}</p>'
+                f'</div>',
+                unsafe_allow_html=True
+            )
+
+            # HITL / Block status
+            if l6.decision_blocked:
+                st.error("🚫 Decision BLOCKED — Grade D requires mandatory "
+                         "human authorisation before any decision is issued.")
+            elif l6.hitl_required:
+                st.warning("⚠ Human review REQUIRED — Grade C. "
+                           "Loan officer must review before issuing decision.")
+            else:
+                st.success("✓ Auto-proceed — confidence is sufficient "
+                           "for automated decision.")
+
+            st.markdown("#### Five-Component Breakdown")
+            st.markdown("*Confidence = 0.30·Grounding + 0.25·Freshness + "
+                        "0.20·Consistency + 0.15·Calibration + 0.10·Compliance*")
+
+            # Component scores bar chart
+            components = {
+                "Grounding Fidelity\n(w=0.30)":
+                    l6.grounding_fidelity.composite,
+                "Freshness & Coverage\n(w=0.25)":
+                    l6.freshness_coverage.composite,
+                "Model Consistency\n(w=0.20)":
+                    l6.model_consistency.composite,
+                "Calibration\n(w=0.15)":
+                    l6.calibration.composite,
+                "Compliance\n(w=0.10)":
+                    l6.compliance_suitability.composite,
+            }
+            weighted = {
+                "Grounding Fidelity\n(w=0.30)":
+                    l6.grounding_fidelity.composite * 0.30,
+                "Freshness & Coverage\n(w=0.25)":
+                    l6.freshness_coverage.composite * 0.25,
+                "Model Consistency\n(w=0.20)":
+                    l6.model_consistency.composite * 0.20,
+                "Calibration\n(w=0.15)":
+                    l6.calibration.composite * 0.15,
+                "Compliance\n(w=0.10)":
+                    l6.compliance_suitability.composite * 0.10,
+            }
+
+            fig_l6 = __import__('plotly.graph_objects',
+                                 fromlist=['graph_objects']).Figure()
+            fig_l6.add_trace(__import__('plotly.graph_objects',
+                             fromlist=['graph_objects']).Bar(
+                x=list(components.keys()),
+                y=list(components.values()),
+                name="Raw Score",
+                marker_color="#9FE1CB",
+            ))
+            fig_l6.add_trace(__import__('plotly.graph_objects',
+                             fromlist=['graph_objects']).Bar(
+                x=list(weighted.keys()),
+                y=list(weighted.values()),
+                name="Weighted Contribution",
+                marker_color="#0F6E56",
+            ))
+            fig_l6.update_layout(
+                barmode="group", height=320,
+                yaxis=dict(range=[0, 1], title="Score"),
+                margin=dict(l=0, r=0, t=20, b=0),
+                paper_bgcolor="rgba(0,0,0,0)",
+                plot_bgcolor="rgba(0,0,0,0)",
+                legend=dict(orientation="h", yanchor="bottom", y=1.02),
+            )
+            fig_l6.add_hline(y=l6.composite_score, line_dash="dash",
+                              line_color="#E24B4A",
+                              annotation_text=f"Grade {l6.grade} "
+                                              f"({l6.composite_score:.3f})")
+            st.plotly_chart(fig_l6, use_container_width=True)
+
+            # Component detail expanders
+            with st.expander("Component 1 — Grounding Fidelity "
+                             f"({l6.grounding_fidelity.composite:.3f})"):
+                c1, c2, c3 = st.columns(3)
+                c1.metric("Retrieval Quality",
+                           f"{l6.grounding_fidelity.retrieval_quality:.3f}")
+                c2.metric("Semantic Similarity",
+                           f"{l6.grounding_fidelity.semantic_similarity:.3f}")
+                c3.metric("Contradiction Penalty",
+                           f"{l6.grounding_fidelity.contradiction_penalty:.3f}")
+                if l6.grounding_fidelity.contradictions_detected:
+                    st.markdown("**Contradictions detected:**")
+                    for c in l6.grounding_fidelity.contradictions_detected:
+                        st.warning(f"⚠ {c}")
+                else:
+                    st.success("✓ No contradictions detected")
+
+            with st.expander("Component 2 — Data Freshness & Coverage "
+                             f"({l6.freshness_coverage.composite:.3f})"):
+                c1, c2, c3 = st.columns(3)
+                c1.metric("Freshness",
+                           f"{l6.freshness_coverage.freshness:.3f}")
+                c2.metric("Source Diversity",
+                           f"{l6.freshness_coverage.source_diversity:.3f}")
+                c3.metric("Evidence Completeness",
+                           f"{l6.freshness_coverage.evidence_completeness:.3f}")
+                st.caption(
+                    f"Sources used: "
+                    f"{', '.join(l6.freshness_coverage.sources_used)}"
+                )
+
+            with st.expander("Component 3 — Model Consistency "
+                             f"({l6.model_consistency.composite:.3f})"):
+                c1, c2, c3 = st.columns(3)
+                c1.metric("XGBoost vs Rules",
+                           f"{l6.model_consistency.xgboost_vs_rules_agreement:.3f}")
+                c2.metric("SHAP Stability",
+                           f"{l6.model_consistency.shap_stability:.3f}")
+                c3.metric("Boundary Distance",
+                           f"{l6.model_consistency.decision_boundary_distance:.3f}")
+                if l6.model_consistency.consistency_flags:
+                    for f in l6.model_consistency.consistency_flags:
+                        st.warning(f"⚠ {f}")
+                else:
+                    st.success("✓ Model and rules are consistent")
+
+            with st.expander("Component 4 — Calibration & Backtesting "
+                             f"({l6.calibration.composite:.3f})"):
+                c1, c2, c3 = st.columns(3)
+                c1.metric("Historical Applications",
+                           l6.calibration.historical_applications)
+                c2.metric("Hit Ratio",
+                           f"{l6.calibration.hit_ratio:.3f}")
+                c3.metric("Calibration Confidence",
+                           f"{l6.calibration.calibration_confidence:.3f}")
+                st.info(l6.calibration.baseline_note)
+
+            with st.expander("Component 5 — Compliance & Suitability "
+                             f"({l6.compliance_suitability.composite:.3f})"):
+                c1, c2, c3 = st.columns(3)
+                c1.metric("Fair Lending",
+                           f"{l6.compliance_suitability.fair_lending_score:.3f}")
+                c2.metric("KYC Completeness",
+                           f"{l6.compliance_suitability.kyc_completeness:.3f}")
+                c3.metric("Regulatory Alignment",
+                           f"{l6.compliance_suitability.regulatory_alignment:.3f}")
+                if l6.compliance_suitability.suitability_flags:
+                    for f in l6.compliance_suitability.suitability_flags:
+                        st.warning(f"⚠ {f}")
+                else:
+                    st.success("✓ All compliance checks passed")
+
+            # Confidence narrative
+            st.markdown("#### Confidence Narrative")
+            st.info(l6.confidence_narrative)
+            st.markdown(
+                '<div class="xai-note">🔍 '
+                '<b>Explainability note:</b> '
+                'L6 transforms confidence from a vague probability into a '
+                'transparent, decomposable, evidence-backed reliability '
+                'assessment. This is meta-explainability — explaining the '
+                'quality of the explanation itself. No prior XAI framework '
+                'provides this.'
+                '</div>',
+                unsafe_allow_html=True
+            )
+        else:
+            st.info("L6 not available for this application.")
 
     # ── Agent Trace ───────────────────────────────────────────────
-    with tab6:
+    with tab7:
         st.markdown("### 🤖 Agent Reasoning Trace")
         st.markdown("*The LLM's reasoning at every layer — this is what makes LEAF agentic*")
 
         if trace:
             observations = trace.get("agent_observations", {})
             decisions_map = trace.get("layer_decisions", {})
-            for layer in ["L0","L1","L2","L3","L4"]:
+            for layer in ["L0","L1","L2","L3","L4","L6"]:
                 obs = observations.get(layer,"")
                 dec_val = decisions_map.get(layer,"")
                 if obs:
@@ -506,7 +705,7 @@ elif st.session_state.screen == "viewing":
             st.info("No agent trace available for this application.")
 
     # ── Evidence Ledger ───────────────────────────────────────────
-    with tab7:
+    with tab8:
         st.markdown("### 📋 Evidence Ledger — sealed artifacts")
         st.markdown("Every layer output is hashed and stored immutably.")
         entries = retrieve_application_ledger(l0.application_id)

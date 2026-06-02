@@ -27,6 +27,7 @@ from layers.l2_grounding import L2GroundingCheck
 from layers.l3_signals import L3SignalExtraction
 from layers.l4_model import L4ModelReasoning_Layer
 from layers.l5_recommendation import L5Recommendation_Layer
+from layers.l6_confidence import L6ConfidenceGrade_Layer
 from storage.ledger import init_ledger, seal_artifact, write_summary
 
 
@@ -266,6 +267,58 @@ class LEAFCreditAgent:
         self._log(f"[Agent] 💭 {l4_reasoning.get('observation', '')}")
         self._log(f"[Agent] → Decision: {l4_reasoning['decision']}")
 
+        # ── L6 ──────────────────────────────────────────────────────
+        self._log("\n[Agent] ▶ Calling L6 — Confidence Grade")
+        l6_layer = L6ConfidenceGrade_Layer()
+        l6 = l6_layer.process(l1, l2, l3, l4, l0.application_id)
+        seal_artifact(l0.application_id, "L6", l6.model_dump())
+        results["L6"] = l6
+        self._log(f"[Agent]   Grade           : {l6.grade}")
+        self._log(f"[Agent]   Composite Score : {l6.composite_score:.3f}")
+        self._log(f"[Agent]   Meaning         : {l6.grade_meaning}")
+        self._log(f"[Agent]   HITL Required   : {l6.hitl_required}")
+        if l6.grounding_fidelity.contradictions_detected:
+            for c in l6.grounding_fidelity.contradictions_detected:
+                self._log(f"[Agent]   ⚠ Contradiction : {c}")
+        if l6.model_consistency.consistency_flags:
+            for f in l6.model_consistency.consistency_flags:
+                self._log(f"[Agent]   ⚠ Consistency  : {f}")
+
+        l6_reasoning = self._agent_reason("L6", {
+            "grade": l6.grade,
+            "composite_score": l6.composite_score,
+            "meaning": l6.grade_meaning,
+            "hitl_required": l6.hitl_required,
+            "decision_blocked": l6.decision_blocked,
+            "contradictions": l6.grounding_fidelity.contradictions_detected,
+            "consistency_flags": l6.model_consistency.consistency_flags,
+            "action_required": l6.action_required,
+        })
+        self._log(f"[Agent] 💭 {l6_reasoning.get('observation', '')}")
+        self._log(f"[Agent] → Decision: {l6_reasoning['decision']}")
+
+        # Grade D blocks the decision entirely
+        if l6.decision_blocked:
+            self._log("[Agent] ✗ Grade D — decision blocked, "
+                      "mandatory human authorisation required")
+            seal_artifact(l0.application_id, "AGENT_HALT", {
+                "reason": "grade_D_confidence_too_low",
+                "grade": l6.grade,
+                "score": l6.composite_score,
+            })
+            return {
+                "status": "blocked",
+                "layer": "L6",
+                "reason": "grade_D_confidence_too_low",
+                "application_id": l0.application_id,
+                "results": results,
+            }
+
+        # Grade C flags for human review but continues
+        if l6.hitl_required:
+            self._log("[Agent] ⚠ Grade C — flagging for human review "
+                      "(L9 will be triggered)")
+
         # ── L5 ──────────────────────────────────────────────────────
         self._log("\n[Agent] ▶ Calling L5 — Generating Explanation Card")
         l5_layer = L5Recommendation_Layer(llm_provider=self.llm)
@@ -296,6 +349,7 @@ class LEAFCreditAgent:
                 "L2": l2_reasoning.get("decision"),
                 "L3": l3_reasoning.get("decision"),
                 "L4": l4_reasoning.get("decision"),
+                "L6": l6_reasoning.get("decision"),
             },
             "agent_observations": {
                 "L0": l0_reasoning.get("observation", ""),
@@ -303,6 +357,7 @@ class LEAFCreditAgent:
                 "L2": l2_reasoning.get("observation", ""),
                 "L3": l3_reasoning.get("observation", ""),
                 "L4": l4_reasoning.get("observation", ""),
+                "L6": l6_reasoning.get("observation", ""),
             },
             "final_decision": l4.decision,
             "completed_at": datetime.now().isoformat(),
@@ -313,7 +368,7 @@ class LEAFCreditAgent:
         self._log(f"  LEAF AGENT COMPLETE")
         self._log(f"  Decision  : {l4.decision}")
         self._log(f"  Approval  : {l4.approval_probability:.1%}")
-        self._log(f"  Layers sealed: L0, L1, L2, L3, L4, L5, AGENT_TRACE")
+        self._log(f"  Layers sealed: L0, L1, L2, L3, L4, L6, L5, AGENT_TRACE")
         self._log(f"{'='*60}\n")
 
         return {

@@ -1,14 +1,13 @@
 """
 LEAF Credit Agent — Demo Scenarios
-4 pre-crafted applications designed to showcase every LEAF capability.
+4 pre-crafted applications covering all LEAF capabilities.
+Uses LLM for genuine L5 explanation generation.
+L6 confidence grade is always computed (no LLM needed).
 
-Used by the "Load Demo Scenarios" button on the home screen.
-Each scenario uses a fixed random seed for consistent results.
-
-Scenario 1 — Strong Approval    : High CIBIL, low DTI, excellent history
-Scenario 2 — Clear Rejection    : Low CIBIL, very high DTI, poor history
-Scenario 3 — Human Review       : Borderline scores, low confidence → HITL trigger
-Scenario 4 — Fairness Flag      : Good profile with disparity flag in L8
+Scenario 1 — Strong Approval    : High CIBIL, low DTI
+Scenario 2 — Clear Rejection    : Low CIBIL, very high DTI
+Scenario 3 — Human Review       : Borderline — Grade C triggers HITL
+Scenario 4 — Fairness Flag      : Compliance concerns detected
 """
 
 import random
@@ -72,8 +71,8 @@ DEMO_SCENARIOS = [
     {
         "tag": "fairness_flag",
         "seed": 404,
-        "label": "Fairness Flag",
-        "description": "Demonstrates L8 fairness audit detecting a disparity concern",
+        "label": "Fairness & Compliance Flag",
+        "description": "Demonstrates L8 fairness audit and compliance concerns",
         "application": {
             "applicant_id": "DEMO-004",
             "amount_requested": 250000,
@@ -92,22 +91,23 @@ DEMO_SCENARIOS = [
 def load_demo_scenarios(llm_provider: LLMProvider, progress_callback=None):
     """
     Run all 4 demo scenarios through the full LEAF Agent pipeline.
+    LLM is used for genuine L5 explanation generation.
+    L6 is always computed — no LLM needed for confidence grading.
     Each scenario uses a fixed random seed for consistent results.
-    Returns list of application IDs that were created.
+    Returns list of application IDs created.
     """
     from storage.ledger import clear_all_data
     from agent import LEAFCreditAgent
 
     # Clear existing data first
     clear_all_data()
-
     created_ids = []
 
     for i, scenario in enumerate(DEMO_SCENARIOS):
         if progress_callback:
             progress_callback(i, len(DEMO_SCENARIOS), scenario["label"])
 
-        # Set fixed seed for reproducible synthetic data
+        # Fixed seed for reproducible synthetic data
         random.seed(scenario["seed"])
         np.random.seed(scenario["seed"])
 
@@ -121,7 +121,7 @@ def load_demo_scenarios(llm_provider: LLMProvider, progress_callback=None):
         )
 
         output = agent.run(app)
-        if output.get("status") in ("complete", "escalated"):
+        if output.get("status") in ("complete", "escalated", "blocked"):
             created_ids.append(output.get("application_id"))
 
         # Reset seed

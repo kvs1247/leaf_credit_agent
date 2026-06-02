@@ -14,6 +14,7 @@ from models.schemas import (
 )
 from layers.l4_model import L4ModelReasoning
 from layers.l5_recommendation import L5Recommendation
+from layers.l6_confidence import L6ConfidenceGrade
 
 
 def load_application_results(application_id: str) -> Optional[dict]:
@@ -54,6 +55,11 @@ def load_application_results(application_id: str) -> Optional[dict]:
     l5_data = get_layer_artifact(application_id, "L5")
     if l5_data:
         results["L5"] = L5Recommendation(**l5_data)
+
+    # L6
+    l6_data = get_layer_artifact(application_id, "L6")
+    if l6_data:
+        results["L6"] = L6ConfidenceGrade(**l6_data)
 
     # Agent trace
     trace_data = get_layer_artifact(application_id, "AGENT_TRACE")
