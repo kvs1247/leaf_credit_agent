@@ -18,6 +18,10 @@ from storage.ledger import (
     init_ledger, get_all_summaries, clear_all_data, retrieve_application_ledger
 )
 from storage.loader import load_application_results
+from layers.l9_human_loop import (
+    ReviewDecision, OverrideType, OverrideRecord,
+    complete_review, L9PendingReview, L9HumanReviewRecord
+)
 
 # ── Page config ──────────────────────────────────────────────────
 st.set_page_config(
@@ -292,6 +296,8 @@ elif st.session_state.screen == "viewing":
     l6 = results.get("L6")
     l7 = results.get("L7")
     l8 = results.get("L8")
+    l9 = results.get("L9")
+    l9_status = results.get("L9_STATUS", "pending")
     trace = results.get("AGENT_TRACE", {})
 
     # ── Decision banner ───────────────────────────────────────────
@@ -357,10 +363,10 @@ elif st.session_state.screen == "viewing":
     st.markdown("---")
 
     # ── Tabs ──────────────────────────────────────────────────────
-    tab0,tab1,tab2,tab3,tab4,tab5,tab6,tab7,tab8,tab9,tab10 = st.tabs([
+    tab0,tab1,tab2,tab3,tab4,tab5,tab6,tab7,tab8,tab9,tab10,tab11 = st.tabs([
         "L0 Context","L1 Provenance","L2 Grounding",
         "L3 Signals","L4 SHAP","L5 Explanation","L6 Confidence",
-        "L7 Governance","L8 Fairness",
+        "L7 Governance","L8 Fairness","L9 Human Review",
         "🤖 Agent Trace","📋 Ledger"
     ])
 
@@ -1034,15 +1040,320 @@ elif st.session_state.screen == "viewing":
         else:
             st.info("L8 not available for this application.")
 
-    # ── Agent Trace ───────────────────────────────────────────────
+    # ── L9 ────────────────────────────────────────────────────────
     with tab9:
+        st.markdown('<div class="leaf-badge">L9 — Human-in-the-Loop & Overrides</div>',
+                    unsafe_allow_html=True)
+        st.markdown("### Human accountability — who decided, why, what changed")
+        st.markdown(
+            '*Even a perfectly explainable AI should not always have '
+            'the final say. L9 provides structured human oversight, '
+            'ensuring recommendations remain under human responsibility.*'
+        )
+
+        if not l9:
+            st.info("L9 not available for this application.")
+        elif l9_status == "completed" and isinstance(l9, L9HumanReviewRecord):
+            # ── Show completed review ──────────────────────────────
+            decision_colors = {
+                "Approved":  ("#E1F5EE", "#0F6E56"),
+                "Modified":  ("#FAEEDA", "#854F0B"),
+                "Rejected":  ("#FCEBEB", "#A32D2D"),
+                "Escalated": ("#F0F0FF", "#534AB7"),
+            }
+            bg, fg = decision_colors.get(
+                l9.approval_status, ("#F5F5F5", "#333")
+            )
+            st.markdown(
+                f'<div style="background:{bg};border:1px solid {fg};'
+                f'border-radius:8px;padding:14px;text-align:center;'
+                f'margin-bottom:14px;">'
+                f'<h3 style="color:{fg};margin:0">Review {l9.approval_status}</h3>'
+                f'<p style="color:{fg};margin:4px 0">'
+                f'Reviewer: {l9.reviewer_name} ({l9.reviewer_role}) · '
+                f'{l9.review_completed_at.strftime("%d %b %Y %H:%M")}</p>'
+                f'</div>',
+                unsafe_allow_html=True
+            )
+            c1, c2, c3, c4 = st.columns(4)
+            c1.metric("Decision", l9.approval_status)
+            c2.metric("Original", l9.original_model_decision)
+            c3.metric("Final", l9.final_decision[:20])
+            c4.metric("Time taken",
+                      f"{l9.time_taken_seconds:.0f}s")
+
+            if l9.confidence_adjusted:
+                st.info(
+                    f"Confidence adjusted: "
+                    f"{l9.original_confidence:.3f} → "
+                    f"{l9.final_confidence:.3f}"
+                )
+
+            st.markdown("#### Reviewer Rationale")
+            st.write(l9.decision_rationale)
+
+            if l9.overrides_applied:
+                st.markdown("#### Overrides Applied")
+                for ov in l9.overrides_applied:
+                    st.warning(
+                        f"**{ov.override_type.value}:** "
+                        f"{ov.original_value} → {ov.new_value} "
+                        f"({ov.reason_for_change})"
+                    )
+
+            if l9.escalation_target:
+                st.error(
+                    f"**Escalated to:** {l9.escalation_target} — "
+                    f"{l9.escalation_reason}"
+                )
+
+            st.markdown("#### Evidence Considered")
+            st.write(l9.evidence_considered)
+            st.caption(f"Review ID: `{l9.review_id}` · "
+                       f"Reviewer ID: `{l9.reviewer_id}`")
+            st.caption(l9.regulatory_basis)
+
+        else:
+            # ── Interactive review form ────────────────────────────
+            pending = l9 if isinstance(l9, L9PendingReview) else None
+
+            if pending:
+                # Trigger status
+                if pending.hitl_required:
+                    st.error(
+                        f"⚠ **Human review required.** "
+                        f"{pending.trigger_summary}"
+                    )
+                    for trigger in pending.triggers:
+                        if trigger.value != "Auto-logged — No trigger (record only)":
+                            st.warning(f"• {trigger.value}")
+                else:
+                    st.success(
+                        "✓ No critical triggers. "
+                        "Review is optional but logged for governance."
+                    )
+
+                # Layer summary for reviewer
+                st.markdown("#### Review Pack — All Layer Outputs")
+                s = pending.layer_summary
+
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.markdown("**L4 — Model Decision**")
+                    st.metric("Decision", s.model_decision)
+                    st.metric("Approval Probability",
+                              f"{s.model_approval_probability:.1%}")
+                    if s.top_approval_factors:
+                        st.caption(
+                            "✓ " + " · ".join(s.top_approval_factors)
+                        )
+                    if s.top_rejection_factors:
+                        st.caption(
+                            "✗ " + " · ".join(s.top_rejection_factors)
+                        )
+                    st.markdown("**L6 — Confidence**")
+                    grade_color = (
+                        "green" if s.confidence_grade in ("A","B")
+                        else "orange" if s.confidence_grade == "C"
+                        else "red"
+                    )
+                    st.markdown(
+                        f"Grade :{grade_color}[{s.confidence_grade}] "
+                        f"({s.confidence_score:.3f}) — "
+                        f"{s.confidence_meaning}"
+                    )
+
+                with col2:
+                    st.markdown("**L7 — Governance**")
+                    verdict_color = (
+                        "green" if s.legitimacy_verdict == "Legitimate"
+                        else "orange" if s.legitimacy_verdict == "Conditional"
+                        else "red"
+                    )
+                    st.markdown(
+                        f":{verdict_color}[{s.legitimacy_verdict}] · "
+                        f"Compliance: {s.compliance_status} · "
+                        f"Suitability: {s.suitability_label}"
+                    )
+                    if s.blocking_violations:
+                        for v in s.blocking_violations:
+                            st.error(f"✗ {v}")
+                    st.markdown("**L8 — Fairness**")
+                    fair_color = (
+                        "green" if s.fairness_verdict == "Fair"
+                        else "orange" if s.fairness_verdict == "Caution"
+                        else "red"
+                    )
+                    st.markdown(
+                        f":{fair_color}[{s.fairness_verdict}] "
+                        f"(OBS={s.fairness_obs:.3f}) · "
+                        f"{s.fairness_flags} flag(s)"
+                    )
+
+                if s.explanation_summary:
+                    st.markdown("**L5 — Explanation Summary**")
+                    st.write(s.explanation_summary)
+
+                st.divider()
+                st.markdown("#### Loan Officer Decision")
+
+                # Reviewer identity
+                col1, col2 = st.columns(2)
+                with col1:
+                    reviewer_name = st.text_input(
+                        "Reviewer Name *",
+                        placeholder="Enter your name"
+                    )
+                with col2:
+                    reviewer_role = st.selectbox(
+                        "Role",
+                        ["Loan Officer", "Senior Analyst",
+                         "Credit Manager", "Compliance Officer",
+                         "Risk Officer"]
+                    )
+
+                # Decision
+                decision_choice = st.radio(
+                    "Decision *",
+                    ["Approve", "Modify", "Reject", "Escalate"],
+                    horizontal=True
+                )
+
+                # Override fields (shown when Modify is selected)
+                overrides = []
+                new_confidence = None
+
+                if decision_choice == "Modify":
+                    st.markdown("**Override Details**")
+                    ov_col1, ov_col2 = st.columns(2)
+                    with ov_col1:
+                        override_type = st.selectbox(
+                            "What are you overriding?",
+                            [o.value for o in OverrideType
+                             if o != OverrideType.NONE]
+                        )
+                        original_val = st.text_input(
+                            "Original value",
+                            value=s.model_decision
+                        )
+                    with ov_col2:
+                        new_val = st.text_input(
+                            "New value",
+                            placeholder="e.g. Conditionally Approved"
+                        )
+                        override_reason = st.text_input(
+                            "Reason for this override"
+                        )
+
+                    if new_val:
+                        overrides.append(OverrideRecord(
+                            override_type=OverrideType(override_type),
+                            original_value=original_val,
+                            new_value=new_val,
+                            reason_for_change=override_reason,
+                        ))
+
+                    new_confidence = st.slider(
+                        "Adjust confidence score (optional)",
+                        min_value=0.0,
+                        max_value=1.0,
+                        value=float(s.confidence_score),
+                        step=0.01,
+                    )
+
+                # Escalation target
+                escalation_target = None
+                if decision_choice == "Escalate":
+                    escalation_target = st.selectbox(
+                        "Escalate to",
+                        ["Senior Credit Manager", "Credit Committee",
+                         "Compliance Head", "Chief Risk Officer"]
+                    )
+
+                # Mandatory reason
+                reason = st.text_area(
+                    "Reason / Justification * (mandatory)",
+                    placeholder=(
+                        "Provide your justification for this decision. "
+                        "This will be sealed in the Evidence Ledger."
+                    ),
+                    height=100
+                )
+
+                evidence = st.text_area(
+                    "Evidence considered",
+                    placeholder=(
+                        "What additional context or evidence did you "
+                        "consider beyond the AI output?"
+                    ),
+                    height=80
+                )
+
+                # Submit
+                if st.button(
+                    "✅ Submit Review & Seal to Evidence Ledger",
+                    type="primary",
+                    use_container_width=True
+                ):
+                    if not reviewer_name:
+                        st.error("Please enter your name.")
+                    elif not reason:
+                        st.error(
+                            "Reason is mandatory. "
+                            "Please provide your justification."
+                        )
+                    else:
+                        completed = complete_review(
+                            pending=pending,
+                            reviewer_name=reviewer_name,
+                            reviewer_role=reviewer_role,
+                            decision=ReviewDecision(decision_choice),
+                            reason=reason,
+                            evidence_considered=evidence or
+                                "No additional evidence noted.",
+                            overrides=overrides or None,
+                            new_confidence=new_confidence
+                                if decision_choice == "Modify" else None,
+                            escalation_target=escalation_target,
+                            review_started_at=pending.created_at,
+                        )
+                        from storage.ledger import seal_artifact
+                        seal_artifact(
+                            pending.application_id,
+                            "L9_COMPLETED",
+                            completed.model_dump()
+                        )
+                        st.success(
+                            f"✅ Review sealed to Evidence Ledger. "
+                            f"Review ID: `{completed.review_id}`"
+                        )
+                        st.rerun()
+
+                st.caption(
+                    f"Review ID: `{pending.review_id}` · "
+                    f"Application: `{pending.application_id}`"
+                )
+
+            st.markdown(
+                '<div class="xai-note">🔍 '
+                '<b>Accountability Explainability:</b> '
+                'L9 explains who changed a recommendation, why, '
+                'what changed, and when. This operationalises '
+                'EU AI Act Article 14 (human oversight) and '
+                'RBI model governance requirements.'
+                '</div>',
+                unsafe_allow_html=True
+            )
+
+    # ── Agent Trace ───────────────────────────────────────────────
+    with tab10:
         st.markdown("### 🤖 Agent Reasoning Trace")
         st.markdown("*The LLM's reasoning at every layer — this is what makes LEAF agentic*")
 
         if trace:
             observations = trace.get("agent_observations", {})
             decisions_map = trace.get("layer_decisions", {})
-            for layer in ["L0","L1","L2","L3","L4","L6","L7","L8"]:
+            for layer in ["L0","L1","L2","L3","L4","L6","L7","L8","L9"]:
                 obs = observations.get(layer,"")
                 dec_val = decisions_map.get(layer,"")
                 if obs:
@@ -1066,7 +1377,7 @@ elif st.session_state.screen == "viewing":
             st.info("No agent trace available for this application.")
 
     # ── Evidence Ledger ───────────────────────────────────────────
-    with tab10:
+    with tab11:
         st.markdown("### 📋 Evidence Ledger — sealed artifacts")
         st.markdown("Every layer output is hashed and stored immutably.")
         entries = retrieve_application_ledger(l0.application_id)

@@ -17,6 +17,7 @@ from layers.l5_recommendation import L5Recommendation
 from layers.l6_confidence import L6ConfidenceGrade
 from layers.l7_compliance import L7GovernanceVerdict
 from layers.l8_fairness import L8FairnessDiagnostics
+from layers.l9_human_loop import L9PendingReview, L9HumanReviewRecord
 
 
 def load_application_results(application_id: str) -> Optional[dict]:
@@ -72,6 +73,17 @@ def load_application_results(application_id: str) -> Optional[dict]:
     l8_data = get_layer_artifact(application_id, "L8")
     if l8_data:
         results["L8"] = L8FairnessDiagnostics(**l8_data)
+
+    # L9 — check for completed review first, fall back to pending
+    l9_completed = get_layer_artifact(application_id, "L9_COMPLETED")
+    if l9_completed:
+        results["L9"] = L9HumanReviewRecord(**l9_completed)
+        results["L9_STATUS"] = "completed"
+    else:
+        l9_pending = get_layer_artifact(application_id, "L9_PENDING")
+        if l9_pending:
+            results["L9"] = L9PendingReview(**l9_pending)
+            results["L9_STATUS"] = "pending"
 
     # Agent trace
     trace_data = get_layer_artifact(application_id, "AGENT_TRACE")

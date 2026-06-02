@@ -16,6 +16,7 @@ from layers.l4_model import L4ModelReasoning_Layer
 from layers.l6_confidence import L6ConfidenceGrade_Layer
 from layers.l7_compliance import L7Compliance_Layer
 from layers.l8_fairness import L8FairnessDiagnostics_Layer
+from layers.l9_human_loop import L9HumanLoop_Layer, L9PendingReview
 from storage.ledger import init_ledger, seal_artifact
 from typing import Optional
 
@@ -179,6 +180,26 @@ def run_pipeline(
         print(f"       Flags detected     : {l8.total_flags}")
         for flag in l8.bias_flags:
             print(f"       ⚠ [{flag.severity}] {flag.bias_type}")
+
+    # ── L9 ───────────────────────────────────────────────────────
+    if verbose:
+        print("\n[LEAF] ▶ L9 — Human-in-the-Loop")
+    l9_pending = L9HumanLoop_Layer().process(
+        l0, l4, l6, l7, l8,
+        l5=results.get("L5"),
+        application_id=l0.application_id,
+    )
+    seal_artifact(l0.application_id, "L9_PENDING", l9_pending.model_dump())
+    results["L9"] = l9_pending
+    if verbose:
+        print(f"       HITL Required   : {l9_pending.hitl_required}")
+        print(f"       Triggers        : "
+              f"{[t.value for t in l9_pending.triggers]}")
+        print(f"       Trigger Summary : {l9_pending.trigger_summary}")
+        print(f"       Review ID       : {l9_pending.review_id}")
+        status = ("⚠ Awaiting human review" if l9_pending.hitl_required
+                  else "✓ Auto-logged")
+        print(f"       Status          : {status}")
 
     # ── L5 (optional — needs LLM) ─────────────────────────────────
     if llm_provider:
