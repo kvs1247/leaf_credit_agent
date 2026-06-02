@@ -18,6 +18,7 @@ from layers.l6_confidence import L6ConfidenceGrade
 from layers.l7_compliance import L7GovernanceVerdict
 from layers.l8_fairness import L8FairnessDiagnostics
 from layers.l9_human_loop import L9PendingReview, L9HumanReviewRecord
+from layers.l10_audit import L10AuditLedger
 
 
 def load_application_results(application_id: str) -> Optional[dict]:
@@ -91,3 +92,12 @@ def load_application_results(application_id: str) -> Optional[dict]:
         results["AGENT_TRACE"] = trace_data
 
     return results
+
+
+def load_l10_audit(application_id: str):
+    """Load or compute L10 audit for a given application."""
+    try:
+        from layers.l10_audit import L10AuditLedger_Layer
+        return L10AuditLedger_Layer().process(application_id)
+    except Exception:
+        return None

@@ -31,6 +31,7 @@ from layers.l6_confidence import L6ConfidenceGrade_Layer
 from layers.l7_compliance import L7Compliance_Layer
 from layers.l8_fairness import L8FairnessDiagnostics_Layer
 from layers.l9_human_loop import L9HumanLoop_Layer, L9PendingReview
+from layers.l10_audit import L10AuditLedger_Layer
 from storage.ledger import init_ledger, seal_artifact, write_summary
 
 
@@ -431,6 +432,22 @@ class LEAFCreditAgent:
             scenario_tag=self.scenario_tag,
         )
 
+        # ── L10 ─────────────────────────────────────────────────────
+        self._log("\n[Agent] ▶ Calling L10 — Auditability & Reproducibility Ledger")
+        l10 = L10AuditLedger_Layer().process(l0.application_id)
+        seal_artifact(l0.application_id, "L10", l10.model_dump())
+        results["L10"] = l10
+        self._log(f"[Agent]   Audit Verdict    : "
+                  f"{l10.audit_certificate.audit_verdict}")
+        self._log(f"[Agent]   Completeness     : "
+                  f"{l10.completeness.completeness_score:.0%}")
+        self._log(f"[Agent]   Integrity        : "
+                  f"{l10.integrity.integrity_status}")
+        self._log(f"[Agent]   Binding Hash     : "
+                  f"{l10.integrity.binding_hash}")
+        self._log(f"[Agent]   Certificate ID   : "
+                  f"{l10.audit_certificate.certificate_id}")
+
         # ── Seal full reasoning trace ────────────────────────────
         full_trace = {
             "reasoning_log": self.reasoning_log,
@@ -465,7 +482,7 @@ class LEAFCreditAgent:
         self._log(f"  LEAF AGENT COMPLETE")
         self._log(f"  Decision  : {l4.decision}")
         self._log(f"  Approval  : {l4.approval_probability:.1%}")
-        self._log(f"  Layers sealed: L0, L1, L2, L3, L4, L6, L7, L5, AGENT_TRACE")
+        self._log(f"  Layers sealed: L0, L1, L2, L3, L4, L6, L7, L8, L9, L10, L5, AGENT_TRACE")
         self._log(f"{'='*60}\n")
 
         return {

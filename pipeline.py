@@ -17,6 +17,7 @@ from layers.l6_confidence import L6ConfidenceGrade_Layer
 from layers.l7_compliance import L7Compliance_Layer
 from layers.l8_fairness import L8FairnessDiagnostics_Layer
 from layers.l9_human_loop import L9HumanLoop_Layer, L9PendingReview
+from layers.l10_audit import L10AuditLedger_Layer
 from storage.ledger import init_ledger, seal_artifact
 from typing import Optional
 
@@ -219,8 +220,28 @@ def run_pipeline(
         if verbose:
             print("\n[LEAF] ℹ L5 skipped — no LLM provider supplied")
 
+    # ── L10 ──────────────────────────────────────────────────────
     if verbose:
-        layers = "L0, L1, L2, L3, L4, L6, L7" + (", L5" if llm_provider else "")
+        print("\n[LEAF] ▶ L10 — Auditability & Reproducibility Ledger")
+    l10 = L10AuditLedger_Layer().process(l0.application_id)
+    seal_artifact(l0.application_id, "L10", l10.model_dump())
+    results["L10"] = l10
+    if verbose:
+        cert = l10.audit_certificate
+        print(f"       Audit Verdict      : {cert.audit_verdict}")
+        print(f"       Completeness       : "
+              f"{l10.completeness.completeness_score:.0%} "
+              f"({l10.completeness.completeness_label})")
+        print(f"       Integrity          : "
+              f"{l10.integrity.integrity_status}")
+        print(f"       Reproducibility    : "
+              f"{l10.reproducibility.reproducibility_score:.0%}")
+        print(f"       Binding Hash       : {l10.integrity.binding_hash}")
+        print(f"       Certificate ID     : {cert.certificate_id}")
+
+    if verbose:
+        layers = "L0, L1, L2, L3, L4, L6, L7, L8, L9, L10" + \
+                 (", L5" if llm_provider else "")
         print(f"\n[LEAF] ✓ Pipeline complete — {l0.application_id}")
         print(f"       Layers sealed: {layers}\n")
 

@@ -367,7 +367,7 @@ elif st.session_state.screen == "viewing":
         "L0 Context","L1 Provenance","L2 Grounding",
         "L3 Signals","L4 SHAP","L5 Explanation","L6 Confidence",
         "L7 Governance","L8 Fairness","L9 Human Review",
-        "🤖 Agent Trace","📋 Ledger"
+        "🤖 Agent Trace","📋 L10 Audit"
     ])
 
     # ── L0 ────────────────────────────────────────────────────────
@@ -1376,17 +1376,232 @@ elif st.session_state.screen == "viewing":
         else:
             st.info("No agent trace available for this application.")
 
-    # ── Evidence Ledger ───────────────────────────────────────────
+    # ── L10 Audit & Reproducibility Ledger ───────────────────────
     with tab11:
-        st.markdown("### 📋 Evidence Ledger — sealed artifacts")
-        st.markdown("Every layer output is hashed and stored immutably.")
-        entries = retrieve_application_ledger(l0.application_id)
-        for entry in entries:
-            st.markdown(
-                f"**{entry.layer}** — `{entry.artifact_hash}` — "
-                f"sealed {entry.sealed_at.strftime('%H:%M:%S')}"
+        st.markdown('<div class="leaf-badge">L10 — Auditability & Reproducibility Ledger</div>',
+                    unsafe_allow_html=True)
+        st.markdown("### Can this decision be reconstructed, verified, and defended?")
+        st.markdown(
+            '*The aircraft black box. Layers 1–9 create intelligence and trust. '
+            'L10 records everything so any decision can be proven — '
+            'anytime, anywhere, by anyone.*'
+        )
+
+        # Load or compute L10
+        from storage.loader import load_l10_audit
+        l10 = load_l10_audit(l0.application_id)
+
+        if not l10:
+            st.info("L10 audit computing...")
+            st.stop()
+
+        cert = l10.audit_certificate
+
+        # ── Audit Certificate banner ──────────────────────────────
+        verdict_styles = {
+            "CLEAN":     ("#E1F5EE", "#0F6E56", "✅"),
+            "QUALIFIED": ("#FAEEDA", "#854F0B", "⚠️"),
+            "ADVERSE":   ("#FCEBEB", "#A32D2D", "🚫"),
+        }
+        bg, fg, icon = verdict_styles.get(
+            cert.audit_verdict, ("#F5F5F5", "#333", "?")
+        )
+        st.markdown(
+            f'<div style="background:{bg};border:2px solid {fg};'
+            f'border-radius:8px;padding:16px;margin-bottom:16px;">'
+            f'<h2 style="color:{fg};margin:0;text-align:center">'
+            f'{icon} Audit Certificate: {cert.audit_verdict}</h2>'
+            f'<p style="color:{fg};margin:6px 0;text-align:center">'
+            f'Certificate ID: <code>{cert.certificate_id}</code></p>'
+            f'<p style="color:{fg};margin:4px 0;text-align:center">'
+            f'Binding Hash: <code>{cert.binding_hash}</code></p>'
+            f'<p style="color:{fg};font-size:12px;margin:4px 0;text-align:center">'
+            f'{cert.audit_verdict_reason}</p>'
+            f'</div>',
+            unsafe_allow_html=True
+        )
+
+        # ── Three key scores ──────────────────────────────────────
+        c1, c2, c3 = st.columns(3)
+        comp_color = ("normal" if l10.completeness.completeness_score >= 0.90
+                      else "off")
+        c1.metric("Completeness",
+                  f"{l10.completeness.completeness_score:.0%}",
+                  delta=l10.completeness.completeness_label)
+        c2.metric("Integrity",
+                  l10.integrity.integrity_status,
+                  delta=f"{l10.integrity.intact}/{l10.integrity.total_artifacts} intact")
+        c3.metric("Reproducibility",
+                  f"{l10.reproducibility.reproducibility_score:.0%}",
+                  delta=f"LEAF v{l10.reproducibility.leaf_version}")
+
+        st.markdown("---")
+
+        # ── Tabs within L10 ───────────────────────────────────────
+        l10_tab1, l10_tab2, l10_tab3, l10_tab4, l10_tab5 = st.tabs([
+            "📋 Completeness", "🔐 Integrity",
+            "🔄 Reproducibility", "⏱️ Timeline",
+            "📄 Certificate"
+        ])
+
+        # Completeness
+        with l10_tab1:
+            st.markdown("#### Traceability — What happened?")
+            st.markdown("*End-to-end lineage of how this decision was produced.*")
+
+            for entry in l10.completeness.entries:
+                if entry.status == "present":
+                    st.success(
+                        f"✓ **{entry.layer}** — {entry.layer_description} "
+                        f"· sealed {entry.sealed_at or 'unknown'} "
+                        f"· `{entry.artifact_hash}`"
+                    )
+                elif entry.status == "missing":
+                    st.error(
+                        f"✗ **{entry.layer}** — {entry.layer_description} "
+                        f"· MISSING — audit trail incomplete"
+                    )
+                else:
+                    st.info(
+                        f"○ **{entry.layer}** — {entry.layer_description} "
+                        f"· Optional — not present"
+                    )
+
+            st.metric(
+                "Completeness Score",
+                f"{l10.completeness.completeness_score:.0%}",
+                delta=l10.completeness.completeness_label
             )
-        st.divider()
-        st.metric("Total artifacts sealed", len(entries))
-        st.caption(f"Application: `{l0.application_id}` · Stored in SQLite · "
-                   f"Retrievable for 7 years (RBI requirement)")
+
+        # Integrity
+        with l10_tab2:
+            st.markdown("#### Auditability — Can an independent party verify this?")
+            st.markdown("*Every artifact re-hashed and compared to stored values.*")
+
+            c1, c2, c3, c4 = st.columns(4)
+            c1.metric("Total Artifacts", l10.integrity.total_artifacts)
+            c2.metric("Intact", l10.integrity.intact)
+            c3.metric("Compromised", l10.integrity.compromised)
+            c4.metric("Not Verified", l10.integrity.not_verified)
+
+            if l10.integrity.integrity_status == "INTACT":
+                st.success(
+                    f"✅ All artifacts intact. "
+                    f"Binding hash: `{l10.integrity.binding_hash}`"
+                )
+            elif l10.integrity.integrity_status == "COMPROMISED":
+                st.error(
+                    f"🚫 INTEGRITY COMPROMISED. "
+                    f"One or more artifacts have been tampered with."
+                )
+            else:
+                st.warning(
+                    f"⚠ Partial verification. "
+                    f"Binding hash: `{l10.integrity.binding_hash}`"
+                )
+
+            st.caption(
+                f"Verified at: {l10.integrity.verified_at.strftime('%H:%M:%S')}"
+            )
+            st.markdown(
+                '<div class="xai-note">🔍 The binding hash is a single '
+                'SHA-256 value computed from all artifact hashes combined. '
+                'If ANY artifact is modified after sealing, the binding hash '
+                'changes — making tampering immediately detectable.</div>',
+                unsafe_allow_html=True
+            )
+
+        # Reproducibility
+        with l10_tab3:
+            st.markdown("#### Reproducibility — Can we recreate the same result?")
+            st.markdown("*All version metadata stored for future reconstruction.*")
+
+            r = l10.reproducibility
+            col1, col2 = st.columns(2)
+            with col1:
+                st.markdown("**System Versions**")
+                st.code(
+                    f"LEAF Framework  : v{r.leaf_version}\n"
+                    f"Credit Model    : {r.model_version}\n"
+                    f"SHAP Explainer  : {r.shap_version}\n"
+                    f"Confidence Eng  : {r.confidence_formula_version}\n"
+                    f"Compliance Rules: {r.compliance_rules_version}\n"
+                    f"Fairness Engine : {r.fairness_engine_version}",
+                    language=None
+                )
+                st.markdown("**Confidence Formula**")
+                st.code(r.confidence_formula, language=None)
+
+            with col2:
+                st.markdown("**Model Configuration**")
+                st.code(
+                    f"Algorithm: {r.model_algorithm}\n"
+                    f"Features:  {len(r.model_features)} signals\n"
+                    f"AUC:       {r.model_auc:.3f}\n"
+                    f"Jurisdiction: {r.jurisdiction}",
+                    language=None
+                )
+                st.markdown("**Data Sources at Decision Time**")
+                for src, freshness in r.data_freshness_at_decision.items():
+                    st.caption(f"• {src}: {freshness}")
+
+            st.metric("Reproducibility Score",
+                      f"{r.reproducibility_score:.0%}")
+            st.info(r.reproducibility_note)
+
+        # Timeline
+        with l10_tab4:
+            st.markdown("#### Decision Timeline — chronological trace")
+            st.caption(
+                f"Total duration: {l10.timeline.total_duration_seconds:.1f}s · "
+                f"Start: {l10.timeline.start_time[11:19]} · "
+                f"End: {l10.timeline.end_time[11:19]}"
+            )
+            for i, event in enumerate(l10.timeline.events):
+                st.markdown(
+                    f"**{i+1}.** `{event['timestamp']}` — "
+                    f"**{event['layer']}**: {event['event']}"
+                )
+                if event.get('hash'):
+                    st.caption(f"   Hash: `{event['hash']}`")
+
+        # Certificate
+        with l10_tab5:
+            st.markdown("#### Audit Certificate — regulatory submission ready")
+
+            cert_data = {
+                "Certificate ID": cert.certificate_id,
+                "Application ID": cert.application_id,
+                "Issued At": cert.issued_at.isoformat(),
+                "Final Decision": cert.final_decision,
+                "Approval Probability": f"{cert.approval_probability:.1%}",
+                "Confidence Grade": cert.confidence_grade,
+                "Legitimacy Verdict": cert.legitimacy_verdict,
+                "Fairness Verdict": cert.fairness_verdict,
+                "Human Review": cert.human_review_status,
+                "Completeness": f"{cert.completeness_score:.0%}",
+                "Integrity": cert.integrity_status,
+                "Reproducibility": f"{cert.reproducibility_score:.0%}",
+                "Binding Hash": cert.binding_hash,
+                "Audit Verdict": cert.audit_verdict,
+                "Retention Period": cert.retention_period,
+            }
+
+            for k, v in cert_data.items():
+                col1, col2 = st.columns([1, 2])
+                col1.caption(k)
+                col2.write(v)
+
+            st.markdown("**Regulatory Frameworks Aligned**")
+            for fw in cert.regulatory_frameworks:
+                st.caption(f"✓ {fw}")
+
+            # Download certificate as JSON
+            import json
+            cert_json = json.dumps(cert_data, indent=2)
+            st.download_button(
+                label="⬇ Download Audit Certificate (JSON)",
+                data=cert_json,
+                file_name=f"LEAF_AuditCert_{cert.certificate_id}.json",
+                mime="application/json",
+            )
