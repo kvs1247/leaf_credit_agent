@@ -28,6 +28,7 @@ from layers.l3_signals import L3SignalExtraction
 from layers.l4_model import L4ModelReasoning_Layer
 from layers.l5_recommendation import L5Recommendation_Layer
 from layers.l6_confidence import L6ConfidenceGrade_Layer
+from layers.l7_compliance import L7Compliance_Layer
 from storage.ledger import init_ledger, seal_artifact, write_summary
 
 
@@ -297,27 +298,55 @@ class LEAFCreditAgent:
         self._log(f"[Agent] 💭 {l6_reasoning.get('observation', '')}")
         self._log(f"[Agent] → Decision: {l6_reasoning['decision']}")
 
-        # Grade D blocks the decision entirely
+        # Grade D — flag it but CONTINUE to L7 and L5
+        # All layers run independently for full transparency.
         if l6.decision_blocked:
-            self._log("[Agent] ✗ Grade D — decision blocked, "
-                      "mandatory human authorisation required")
-            seal_artifact(l0.application_id, "AGENT_HALT", {
-                "reason": "grade_D_confidence_too_low",
-                "grade": l6.grade,
-                "score": l6.composite_score,
-            })
-            return {
-                "status": "blocked",
-                "layer": "L6",
-                "reason": "grade_D_confidence_too_low",
-                "application_id": l0.application_id,
-                "results": results,
-            }
+            self._log("[Agent] ⚠ Grade D — low confidence flagged, "
+                      "continuing pipeline for full layer visibility")
 
         # Grade C flags for human review but continues
         if l6.hitl_required:
             self._log("[Agent] ⚠ Grade C — flagging for human review "
                       "(L9 will be triggered)")
+
+        # ── L7 ──────────────────────────────────────────────────────
+        self._log("\n[Agent] ▶ Calling L7 — Compliance & Suitability")
+        l7_layer = L7Compliance_Layer()
+        l7 = l7_layer.process(l0, l3, l4, l6,
+                               application_id=l0.application_id)
+        seal_artifact(l0.application_id, "L7", l7.model_dump())
+        results["L7"] = l7
+        self._log(f"[Agent]   Legitimacy       : {l7.legitimacy_verdict.value}")
+        self._log(f"[Agent]   Compliance       : {l7.compliance.overall_status}")
+        self._log(f"[Agent]   Suitability      : "
+                  f"{l7.suitability.suitability_label.value} "
+                  f"({l7.suitability.overall_score:.3f})")
+        self._log(f"[Agent]   Override Required: {l7.override_required}")
+
+        l7_reasoning = self._agent_reason("L7", {
+            "legitimacy_verdict": l7.legitimacy_verdict.value,
+            "decision_legitimate": l7.decision_legitimate,
+            "compliance_status": l7.compliance.overall_status,
+            "suitability_label": l7.suitability.suitability_label.value,
+            "suitability_score": l7.suitability.overall_score,
+            "override_required": l7.override_required,
+            "override_reason": l7.override_reason,
+            "blocking_violations": l7.compliance.blocking_violations,
+        })
+        self._log(f"[Agent] 💭 {l7_reasoning.get('observation', '')}")
+        self._log(f"[Agent] → Decision: {l7_reasoning['decision']}")
+
+        # Blocked by governance — flag it but CONTINUE to L5
+        # Each layer runs independently so the full explanation
+        # is always generated for transparency and demonstration.
+        if l7.legitimacy_verdict.value == "Blocked":
+            self._log("[Agent] ⚠ Decision BLOCKED by L7 governance — "
+                      "continuing to L5 for full transparency")
+            seal_artifact(l0.application_id, "AGENT_GOVERNANCE_BLOCK", {
+                "reason": "governance_blocked",
+                "compliance_violations": l7.compliance.blocking_violations,
+                "note": "Pipeline continues — all layers run independently"
+            })
 
         # ── L5 ──────────────────────────────────────────────────────
         self._log("\n[Agent] ▶ Calling L5 — Generating Explanation Card")
@@ -329,12 +358,22 @@ class LEAFCreditAgent:
         self._log(f"[Agent]   Rationale: {l5.plain_language_rationale[:100]}...")
 
         # ── Write summary to summaries table ────────────────────
+        # Final decision reflects governance outcome, not just model output
+        if l7 and l7.legitimacy_verdict.value == "Blocked":
+            final_decision = f"Blocked — {l4.decision} (Governance)"
+        elif l7 and l7.legitimacy_verdict.value == "Conditional":
+            final_decision = f"Conditional — {l4.decision} (Review Required)"
+        elif l6.decision_blocked:
+            final_decision = f"Flagged — {l4.decision} (Grade D)"
+        else:
+            final_decision = l4.decision
+
         write_summary(
             application_id=l0.application_id,
             applicant_name=application.applicant_name,
             amount_requested=application.amount_requested,
             purpose=application.purpose,
-            decision=l4.decision,
+            decision=final_decision,
             approval_probability=l4.approval_probability,
             confidence=l4.decision_confidence,
             scenario_tag=self.scenario_tag,
@@ -350,6 +389,7 @@ class LEAFCreditAgent:
                 "L3": l3_reasoning.get("decision"),
                 "L4": l4_reasoning.get("decision"),
                 "L6": l6_reasoning.get("decision"),
+                "L7": l7_reasoning.get("decision"),
             },
             "agent_observations": {
                 "L0": l0_reasoning.get("observation", ""),
@@ -358,6 +398,7 @@ class LEAFCreditAgent:
                 "L3": l3_reasoning.get("observation", ""),
                 "L4": l4_reasoning.get("observation", ""),
                 "L6": l6_reasoning.get("observation", ""),
+                "L7": l7_reasoning.get("observation", ""),
             },
             "final_decision": l4.decision,
             "completed_at": datetime.now().isoformat(),
@@ -368,7 +409,7 @@ class LEAFCreditAgent:
         self._log(f"  LEAF AGENT COMPLETE")
         self._log(f"  Decision  : {l4.decision}")
         self._log(f"  Approval  : {l4.approval_probability:.1%}")
-        self._log(f"  Layers sealed: L0, L1, L2, L3, L4, L6, L5, AGENT_TRACE")
+        self._log(f"  Layers sealed: L0, L1, L2, L3, L4, L6, L7, L5, AGENT_TRACE")
         self._log(f"{'='*60}\n")
 
         return {

@@ -290,6 +290,7 @@ elif st.session_state.screen == "viewing":
     l4 = results.get("L4")
     l5 = results.get("L5")
     l6 = results.get("L6")
+    l7 = results.get("L7")
     trace = results.get("AGENT_TRACE", {})
 
     # ── Decision banner ───────────────────────────────────────────
@@ -300,31 +301,65 @@ elif st.session_state.screen == "viewing":
     prob = l4.approval_probability if l4 else 0
     conf = l4.decision_confidence if l4 else ""
 
-    if "Approved" in dec and "Conditional" not in dec:
+    # ── Governance-aware banner ───────────────────────────────────
+    # L7 overrides the model decision presentation when governance
+    # blocks or conditionally approves. The banner reflects the
+    # FINAL governance-adjusted outcome — not just the model output.
+    # Core insight: a model approval ≠ a legitimate decision.
+
+    if l7 and l7.legitimacy_verdict.value == "Blocked":
+        st.markdown(
+            f'<div class="decision-rejected">'
+            f'<h2 style="color:#A32D2D;margin:0">🚫 Blocked by Governance</h2>'
+            f'<p style="color:#A32D2D;margin:4px 0">'
+            f'Model decision: {dec} ({prob:.1%}) — '
+            f'overridden by L7 compliance violation</p>'
+            f'<p style="color:#A32D2D;font-size:13px;margin:2px 0">'
+            f'{l7.compliance.blocking_violations[0] if l7.compliance.blocking_violations else "Governance rule violated"}'
+            f'</p></div>', unsafe_allow_html=True)
+
+    elif l7 and l7.legitimacy_verdict.value == "Conditional":
+        st.markdown(
+            f'<div class="decision-referred">'
+            f'<h2 style="color:#854F0B;margin:0">⚠ Conditional — Human Review Required</h2>'
+            f'<p style="color:#854F0B;margin:4px 0">'
+            f'Model decision: {dec} ({prob:.1%}) · Confidence: {conf}</p>'
+            f'<p style="color:#854F0B;font-size:13px;margin:2px 0">'
+            f'{l7.override_reason or "Officer review required before issuing decision"}'
+            f'</p></div>', unsafe_allow_html=True)
+
+    elif "Approved" in dec and "Conditional" not in dec:
         st.markdown(
             f'<div class="decision-approved">'
             f'<h2 style="color:#0F6E56;margin:0">✓ {dec}</h2>'
-            f'<p style="color:#0F6E56;margin:4px 0">Approval: {prob:.1%} · Confidence: {conf}</p>'
+            f'<p style="color:#0F6E56;margin:4px 0">'
+            f'Approval: {prob:.1%} · Confidence: {conf}</p>'
+            f'<p style="color:#0F6E56;font-size:13px;margin:2px 0">'
+            f'Governance: Legitimate ✓</p>'
             f'</div>', unsafe_allow_html=True)
+
     elif "Rejected" in dec:
         st.markdown(
             f'<div class="decision-rejected">'
             f'<h2 style="color:#A32D2D;margin:0">✗ {dec}</h2>'
             f'<p style="color:#A32D2D;margin:4px 0">Approval: {prob:.1%}</p>'
             f'</div>', unsafe_allow_html=True)
+
     else:
         st.markdown(
             f'<div class="decision-referred">'
             f'<h2 style="color:#854F0B;margin:0">⚠ {dec}</h2>'
-            f'<p style="color:#854F0B;margin:4px 0">Approval: {prob:.1%} · {conf}</p>'
+            f'<p style="color:#854F0B;margin:4px 0">'
+            f'Approval: {prob:.1%} · {conf}</p>'
             f'</div>', unsafe_allow_html=True)
 
     st.markdown("---")
 
     # ── Tabs ──────────────────────────────────────────────────────
-    tab0,tab1,tab2,tab3,tab4,tab5,tab6,tab7,tab8 = st.tabs([
+    tab0,tab1,tab2,tab3,tab4,tab5,tab6,tab7,tab8,tab9 = st.tabs([
         "L0 Context","L1 Provenance","L2 Grounding",
         "L3 Signals","L4 SHAP","L5 Explanation","L6 Confidence",
+        "L7 Governance",
         "🤖 Agent Trace","📋 Ledger"
     ])
 
@@ -453,10 +488,24 @@ elif st.session_state.screen == "viewing":
                 'makes the adverse action notice legally defensible.</div>',
                 unsafe_allow_html=True)
 
+    
     # ── L5 ────────────────────────────────────────────────────────
     with tab5:
         st.markdown('<div class="leaf-badge">L5 — Explanation Card (LLM Generated)</div>',
                     unsafe_allow_html=True)
+        if l7 and l7.legitimacy_verdict.value == "Blocked":
+                st.warning(
+                    "⚖️ **Governance Notice:** This decision was blocked by L7. "
+                    "The Explanation Card below was generated for full transparency "
+                    "and audit purposes — it would NOT be issued to the applicant. "
+                    "A governance violation notice is issued instead."
+                )
+        elif l7 and l7.legitimacy_verdict.value == "Conditional":
+                st.info(
+                    "⚠️ **Pending Review:** This explanation card is generated "
+                    "but held pending human officer review."
+                )
+
         if l5:
             card = l5.explanation_card
             st.markdown(f"### {card.decision_summary}")
@@ -483,7 +532,12 @@ elif st.session_state.screen == "viewing":
             st.caption(card.confidence_note)
             st.caption(f"📋 {card.applicant_rights}")
         else:
-            st.info("L5 not available — LLM provider not supplied for this run.")
+            st.info(
+                    "L5 explanation not available for this run. "
+                    "This application was loaded from a previous session "
+                    "before the LLM was connected, or the API key was "
+                    "not supplied when this application was processed."
+                )
 
     # ── L6 ────────────────────────────────────────────────────────
     with tab6:
@@ -672,16 +726,153 @@ elif st.session_state.screen == "viewing":
             )
         else:
             st.info("L6 not available for this application.")
+    # ── L7 ────────────────────────────────────────────────────────
+    with tab7:
+        st.markdown('<div class="leaf-badge">L7 — Compliance & Suitability</div>',
+                    unsafe_allow_html=True)
+        st.markdown("### Is this decision legitimate — not just correct?")
+        st.markdown(
+            '*This layer introduces* ***Governance Explainability*** *— '
+            'distinct from all previous layers. L4-L6 ask: is the decision '
+            'correct? L7 asks: is the decision legitimate?*'
+        )
+
+        if l7:
+            # Legitimacy verdict banner
+            verdict_colors = {
+                "Legitimate":   ("#E1F5EE", "#0F6E56"),
+                "Conditional":  ("#FAEEDA", "#854F0B"),
+                "Blocked":      ("#FCEBEB", "#A32D2D"),
+            }
+            bg, fg = verdict_colors.get(
+                l7.legitimacy_verdict.value, ("#F5F5F5", "#333")
+            )
+            st.markdown(
+                f'<div style="background:{bg};border:1px solid {fg};'
+                f'border-radius:8px;padding:16px;text-align:center;'
+                f'margin-bottom:16px;">'
+                f'<h2 style="color:{fg};margin:0">'
+                f'{l7.legitimacy_verdict.value}</h2>'
+                f'<p style="color:{fg};margin:4px 0">'
+                f'Decision Legitimate: '
+                f'{"Yes ✓" if l7.decision_legitimate else "No ✗"} · '
+                f'Override Required: '
+                f'{"Yes ⚠" if l7.override_required else "No"}</p>'
+                f'</div>',
+                unsafe_allow_html=True
+            )
+
+            if l7.override_reason:
+                st.warning(f"⚠ {l7.override_reason}")
+
+            # Two columns — compliance and suitability
+            col1, col2 = st.columns(2)
+
+            with col1:
+                st.markdown("#### Component 1 — Compliance")
+                st.markdown(
+                    f"*Is this recommendation legally and "
+                    f"procedurally acceptable?*"
+                )
+                status_color = (
+                    "green" if l7.compliance.overall_status == "Compliant"
+                    else "orange" if "Warning" in l7.compliance.overall_status
+                    else "red"
+                )
+                st.markdown(
+                    f"**Status:** :{status_color}[{l7.compliance.overall_status}]"
+                )
+                c1, c2, c3 = st.columns(3)
+                c1.metric("Pass", l7.compliance.passed)
+                c2.metric("Fail", l7.compliance.failed)
+                c3.metric("Warnings", l7.compliance.warnings)
+
+                st.markdown("**Checks:**")
+                for check in l7.compliance.checks:
+                    if check.result.value == "pass":
+                        st.success(
+                            f"✓ {check.rule_name} — {check.actual_value}"
+                        )
+                    elif check.result.value == "warning":
+                        st.warning(
+                            f"⚠ {check.rule_name} — {check.actual_value}"
+                        )
+                    else:
+                        st.error(
+                            f"✗ {check.rule_name} — {check.actual_value}"
+                        )
+                    with st.expander(
+                        f"Regulation reference — {check.rule_id}"
+                    ):
+                        st.caption(
+                            f"**Regulation:** {check.regulation_reference}"
+                        )
+                        st.caption(f"**Threshold:** {check.threshold}")
+                        st.write(check.details)
+
+            with col2:
+                st.markdown("#### Component 2 — Suitability")
+                st.markdown(
+                    "*Is this recommendation appropriate for THIS borrower?*"
+                )
+                suit_color = (
+                    "green" if l7.suitability.suitability_label.value
+                    == "Suitable"
+                    else "orange" if l7.suitability.suitability_label.value
+                    == "Partial Match"
+                    else "red"
+                )
+                st.markdown(
+                    f"**Label:** :{suit_color}"
+                    f"[{l7.suitability.suitability_label.value}] "
+                    f"(score: {l7.suitability.overall_score:.3f})"
+                )
+
+                st.markdown("**Five dimensions:**")
+                for dim in l7.suitability.dimensions:
+                    color = (
+                        "green" if dim.label == "Suitable"
+                        else "orange" if dim.label == "Partial Match"
+                        else "red"
+                    )
+                    with st.expander(
+                        f":{color}[{dim.label}] {dim.dimension} "
+                        f"— {dim.score:.2f}"
+                    ):
+                        st.caption(f"**Actual:** {dim.actual}")
+                        st.caption(f"**Benchmark:** {dim.benchmark}")
+                        st.write(dim.assessment)
+
+                if l7.suitability.primary_concern:
+                    st.warning(
+                        f"⚠ Primary concern: {l7.suitability.primary_concern}"
+                    )
+
+            # Governance narrative
+            st.markdown("#### Governance Narrative")
+            st.info(l7.governance_narrative)
+            st.markdown(
+                '<div class="xai-note">🔍 '
+                '<b>Governance Explainability:</b> '
+                'A hospital analogy — L4 is the diagnosis, L5 is the '
+                'treatment recommendation, L6 is confidence in the diagnosis. '
+                'L7 asks: can this treatment legitimately be prescribed '
+                'to THIS patient? Same logic applies here.'
+                '</div>',
+                unsafe_allow_html=True
+            )
+        else:
+            st.info("L7 not available for this application.")
 
     # ── Agent Trace ───────────────────────────────────────────────
-    with tab7:
+    with tab8:
         st.markdown("### 🤖 Agent Reasoning Trace")
         st.markdown("*The LLM's reasoning at every layer — this is what makes LEAF agentic*")
 
         if trace:
             observations = trace.get("agent_observations", {})
             decisions_map = trace.get("layer_decisions", {})
-            for layer in ["L0","L1","L2","L3","L4","L6"]:
+            for layer in ["L0","L1","L2","L3","L4","L6","L7"]:
                 obs = observations.get(layer,"")
                 dec_val = decisions_map.get(layer,"")
                 if obs:
@@ -705,7 +896,7 @@ elif st.session_state.screen == "viewing":
             st.info("No agent trace available for this application.")
 
     # ── Evidence Ledger ───────────────────────────────────────────
-    with tab8:
+    with tab9:
         st.markdown("### 📋 Evidence Ledger — sealed artifacts")
         st.markdown("Every layer output is hashed and stored immutably.")
         entries = retrieve_application_ledger(l0.application_id)

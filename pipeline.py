@@ -14,6 +14,7 @@ from layers.l2_grounding import L2GroundingCheck
 from layers.l3_signals import L3SignalExtraction
 from layers.l4_model import L4ModelReasoning_Layer
 from layers.l6_confidence import L6ConfidenceGrade_Layer
+from layers.l7_compliance import L7Compliance_Layer
 from storage.ledger import init_ledger, seal_artifact
 from typing import Optional
 
@@ -141,6 +142,27 @@ def run_pipeline(
             print("\n[LEAF] ✗ Grade D — decision blocked, mandatory human review")
         return {"status": "blocked", "reason": "grade_D", "results": results}
 
+    # ── L7 ───────────────────────────────────────────────────────
+    if verbose:
+        print("\n[LEAF] ▶ L7 — Compliance & Suitability")
+    l7 = L7Compliance_Layer().process(
+        l0, l3, l4, l6, application_id=l0.application_id
+    )
+    seal_artifact(l0.application_id, "L7", l7.model_dump())
+    results["L7"] = l7
+    if verbose:
+        print(f"       Legitimacy Verdict  : {l7.legitimacy_verdict.value}")
+        print(f"       Decision Legitimate : {l7.decision_legitimate}")
+        print(f"       Override Required   : {l7.override_required}")
+        print(f"       Compliance          : {l7.compliance.overall_status}")
+        print(f"       Suitability         : {l7.suitability.suitability_label.value} "
+              f"({l7.suitability.overall_score:.3f})")
+        if l7.compliance.blocking_violations:
+            for v in l7.compliance.blocking_violations:
+                print(f"       ✗ Blocking: {v}")
+        if l7.override_reason:
+            print(f"       ⚠ Override: {l7.override_reason}")
+
     # ── L5 (optional — needs LLM) ─────────────────────────────────
     if llm_provider:
         if verbose:
@@ -160,7 +182,7 @@ def run_pipeline(
             print("\n[LEAF] ℹ L5 skipped — no LLM provider supplied")
 
     if verbose:
-        layers = "L0, L1, L2, L3, L4, L6" + (", L5" if llm_provider else "")
+        layers = "L0, L1, L2, L3, L4, L6, L7" + (", L5" if llm_provider else "")
         print(f"\n[LEAF] ✓ Pipeline complete — {l0.application_id}")
         print(f"       Layers sealed: {layers}\n")
 
